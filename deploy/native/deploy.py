@@ -28,10 +28,12 @@ def verify_release(archive, expected_sha256, destination):
     if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_sha256:
         raise ValueError('release checksum mismatch')
     with tarfile.open(archive, 'r:gz') as tar:
+        names = set()
         for member in tar.getmembers():
             path = Path(member.name)
-            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+            if path.is_absolute() or '..' in path.parts or member.name in names or not (member.isfile() or member.isdir()):
                 raise ValueError('unsafe release member')
+            names.add(member.name)
         tar.extractall(destination, filter='data')
     manifest = json.loads((destination / 'manifest.json').read_text())
     if manifest.get('dirty_source') or manifest.get('os') != 'linux' or manifest.get('build_type') != 'source':
@@ -102,8 +104,8 @@ def deploy(args):
             if active:
                 run(['systemctl', 'start', args.service])
             raise
-        activate(target, current)
         try:
+            activate(target, current)
             run(['systemctl', 'start', args.service])
             if not health(args.health_url, manifest['version']):
                 raise RuntimeError('release health check failed')
