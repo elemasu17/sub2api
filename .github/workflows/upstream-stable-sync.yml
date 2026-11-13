@@ -1,0 +1,70 @@
+name: Propose upstream stable update
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-stable-sync
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    if: github.repository == 'elemasu17/sub2api'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      - name: Merge stable upstream into a review branch
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          SYNC_USES_GITHUB_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          upstream_tag=$(gh api repos/Wei-Shaw/sub2api/releases/latest --jq '.tag_name')
+          [[ "$upstream_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git remote add upstream https://github.com/Wei-Shaw/sub2api.git
+          git fetch --no-tags upstream "refs/tags/$upstream_tag"
+          upstream_commit=$(git rev-parse FETCH_HEAD)
+          if git merge-base --is-ancestor "$upstream_commit" HEAD; then
+            echo "Stable release $upstream_tag is already included."
+            exit 0
+          fi
+          branch="sync/upstream-$upstream_tag"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Review branch $branch already exists; leaving it unchanged."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          if ! git merge --no-edit "$upstream_commit"; then
+            git diff --name-only --diff-filter=U
+            git merge --abort
+            echo '::error::Upstream merge has conflicts. Resolve in a dedicated review branch; nothing was published.'
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/$branch"
+          cat > "$RUNNER_TEMP/upstream-pr.md" <<EOF
+          Merge upstream stable release $upstream_tag ($upstream_commit).
+
+          Run backend unit/integration checks, frontend checks, native compilation, and account-management API contract tests before merging. Validate database migrations against a restored backup. This PR does not deploy or upgrade production.
+
+          The native build and deployment files, purchase link, and disabled official binary replacement must remain intact. When GITHUB_TOKEN creates this PR, the sync job explicitly dispatches native-checks against this branch because GitHub suppresses ordinary push/PR-triggered workflows. Inspect that workflow run as well as this PR's checks before merging.
+          EOF
+          gh pr create --draft --base "$BASE_BRANCH" --head "$branch" --title "Sync upstream $upstream_tag" --body-file "$RUNNER_TEMP/upstream-pr.md"
+          if [[ "$SYNC_USES_GITHUB_TOKEN" == true ]]; then
+            gh workflow run native-checks.yml --ref "$BASE_BRANCH" -f ref="$branch"
+          fi

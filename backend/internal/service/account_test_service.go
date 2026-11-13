@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -367,6 +368,11 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
+	}
+	if principal := adminaccess.RestrictedFromContext(ctx); principal != nil {
+		if !ScopedOpenAIAccountTestAllowed(principal, account) || normalizeAccountTestMode(mode) != AccountTestModeDefault {
+			return s.sendErrorAndEnd(c, "Account test is not permitted")
+		}
 	}
 	bindAccountTestPlatform(c, account)
 
@@ -812,6 +818,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// /responses wire and does NOT apply the legacy compact-only mapping
 	// (post-#5641 semantics: compact_model_mapping is /responses/compact-only).
 	testModelID = account.GetMappedModel(testModelID)
+	if adminaccess.RestrictedFromContext(ctx) != nil && (mode != AccountTestModeDefault || isOpenAIImageModel(testModelID)) {
+		return s.sendErrorAndEnd(c, "Only text connectivity tests are permitted")
+	}
 	if mode == AccountTestModeCompact {
 		return s.testOpenAICompactConnection(c, account, testModelID)
 	}
@@ -957,7 +966,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if isOAuth && s.accountRepo != nil {
+	if isOAuth && s.accountRepo != nil && adminaccess.RestrictedFromContext(ctx) == nil {
 		if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
 			_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
 			mergeAccountExtra(account, updates)
@@ -979,7 +988,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && adminaccess.RestrictedFromContext(ctx) == nil {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -2348,6 +2357,9 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 }
 
 func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, account *Account, headers http.Header, body []byte) {
+	if adminaccess.RestrictedFromContext(ctx) != nil {
+		return
+	}
 	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
@@ -3282,6 +3294,23 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 }
 
 func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
+	if adminaccess.RestrictedFromContext(c.Request.Context()) != nil {
+		if event.Type != "test_complete" && event.Type != "error" {
+			return
+		}
+		safe := struct {
+			Type    string `json:"type"`
+			Success bool   `json:"success"`
+			Code    string `json:"code,omitempty"`
+		}{Type: "test_complete", Success: event.Type == "test_complete" && event.Success}
+		if !safe.Success {
+			safe.Code = "ACCOUNT_TEST_FAILED"
+		}
+		encoded, _ := json.Marshal(safe)
+		_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", encoded)
+		c.Writer.Flush()
+		return
+	}
 	if event.Type == "test_complete" {
 		if suppress, ok := c.Get(accountTestSuppressCompletionContextKey); ok {
 			if suppressCompletion, _ := suppress.(bool); suppressCompletion {
@@ -3299,6 +3328,9 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
+	if adminaccess.RestrictedFromContext(c.Request.Context()) != nil {
+		errorMsg = "Account connectivity test failed"
+	}
 	logAccountTestError(c, errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)

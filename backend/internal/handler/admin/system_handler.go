@@ -83,6 +83,10 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 // PerformUpdate downloads and applies the update
 // POST /api/v1/admin/system/update
 func (h *SystemHandler) PerformUpdate(c *gin.Context) {
+	if !service.OfficialBinaryUpdatesEnabled() {
+		response.ErrorFrom(c, service.ErrOfficialBinaryUpdatesDisabled)
+		return
+	}
 	operationID := buildSystemOperationID(c, "update")
 	payload := gin.H{"operation_id": operationID}
 	executeAdminIdempotentJSON(c, "admin.system.update", payload, service.DefaultSystemOperationIdempotencyTTL(), func(ctx context.Context) (any, error) {
@@ -147,6 +151,10 @@ func (h *SystemHandler) GetRollbackVersions(c *gin.Context) {
 // installs that specific release (must be one of the recent rollback versions).
 // POST /api/v1/admin/system/rollback
 func (h *SystemHandler) Rollback(c *gin.Context) {
+	if !service.OfficialBinaryUpdatesEnabled() {
+		response.ErrorFrom(c, service.ErrOfficialBinaryUpdatesDisabled)
+		return
+	}
 	var req struct {
 		Version string `json:"version"`
 	}

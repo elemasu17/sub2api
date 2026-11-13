@@ -766,6 +766,7 @@ export default {
 
   // Redeem
   redeem: {
+    purchaseCode: '购买兑换码',
     title: '兑换码',
     description: '输入兑换码以充值余额或增加并发数',
     currentBalance: '当前余额',

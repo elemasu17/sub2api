@@ -1,0 +1,109 @@
+name: Native Linux release
+
+on:
+  push:
+    tags: ['native-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing native-vX.Y.Z-aibj.N tag to build'
+        required: true
+        type: string
+      publish:
+        description: 'Publish the verified archive as a GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'elemasu17/sub2api'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Validate release tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^native-v[0-9]+\.[0-9]+\.[0-9]+-aibj\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${RELEASE_TAG#native-v}" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '9.15.9'
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Check reachable Go vulnerabilities
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+      - name: Build native archive
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/native-release
+          GOPROXY: https://proxy.golang.org,direct
+          GOSUMDB: sum.golang.org
+        run: deploy/native/build.sh
+      - name: Frontend regression checks
+        run: |
+          make test-frontend
+          pnpm --dir frontend exec vitest run src/views/user/__tests__/RedeemView.purchase.spec.ts
+      - name: Backend regression checks
+        working-directory: backend
+        run: |
+          make test-unit
+          make test-integration
+      - name: Validate native archive
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/native-release
+        run: |
+          cd "$OUTPUT_DIR"
+          sha256sum -c checksums.txt
+          mkdir extracted
+          tar -xzf "sub2api_${VERSION}_linux_amd64.tar.gz" -C extracted
+          ./extracted/sub2api -version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-linux-amd64
+          path: |
+            ${{ runner.temp }}/native-release/*.tar.gz
+            ${{ runner.temp }}/native-release/*.sha256
+            ${{ runner.temp }}/native-release/checksums.txt
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish == true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-linux-amd64
+          path: release
+      - name: Publish native files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$RELEASE_TAG" release/* --verify-tag --title "$RELEASE_TAG" --generate-notes

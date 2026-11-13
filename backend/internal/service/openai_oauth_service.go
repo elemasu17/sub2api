@@ -39,10 +39,18 @@ func (s *OpenAIOAuthService) SetPrivacyClientFactory(factory PrivacyClientFactor
 type OpenAIAuthURLResult struct {
 	AuthURL   string `json:"auth_url"`
 	SessionID string `json:"session_id"`
+	State     string `json:"state"`
 }
 
 // GenerateAuthURL generates an OpenAI OAuth authorization URL
 func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, redirectURI, platform string) (*OpenAIAuthURLResult, error) {
+	owner, policyHash, err := openAIOAuthPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRestrictedOpenAIOAuthInput(ctx, proxyID, redirectURI, platform); err != nil {
+		return nil, err
+	}
 	// Generate PKCE values
 	state, err := openai.GenerateState()
 	if err != nil {
@@ -83,12 +91,14 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 
 	// Store session
 	session := &openai.OAuthSession{
-		State:        state,
-		CodeVerifier: codeVerifier,
-		ClientID:     clientID,
-		RedirectURI:  redirectURI,
-		ProxyURL:     proxyURL,
-		CreatedAt:    time.Now(),
+		OwnerKeyID:      owner,
+		OwnerPolicyHash: policyHash,
+		State:           state,
+		CodeVerifier:    codeVerifier,
+		ClientID:        clientID,
+		RedirectURI:     redirectURI,
+		ProxyURL:        proxyURL,
+		CreatedAt:       time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
@@ -98,6 +108,7 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	return &OpenAIAuthURLResult{
 		AuthURL:   authURL,
 		SessionID: sessionID,
+		State:     state,
 	}, nil
 }
 
@@ -136,11 +147,17 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	if !ok {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
 	}
+	if err := validateOpenAIOAuthSessionOwner(ctx, session, input); err != nil {
+		return nil, err
+	}
 	if input.State == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_STATE_REQUIRED", "oauth state is required")
 	}
 	if subtle.ConstantTimeCompare([]byte(input.State), []byte(session.State)) != 1 {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_STATE", "invalid oauth state")
+	}
+	if session.OwnerKeyID != "" && !s.sessionStore.Consume(input.SessionID, session) {
+		return nil, infraerrors.BadRequest("OPENAI_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
 	}
 
 	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL

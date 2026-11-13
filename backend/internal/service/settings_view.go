@@ -355,6 +355,7 @@ type PublicSettings struct {
 	SiteLogo                            string
 	SiteSubtitle                        string
 	APIBaseURL                          string
+	RedeemPurchaseURL                   string
 	ContactInfo                         string
 	DocURL                              string
 	HomeContent                         string

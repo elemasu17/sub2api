@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -1293,6 +1294,10 @@ type PreviewFromCRSRequest struct {
 // Test handles testing account connectivity with SSE streaming
 // POST /api/v1/admin/accounts/:id/test
 func (h *AccountHandler) Test(c *gin.Context) {
+	if adminaccess.RestrictedFromContext(c.Request.Context()) != nil {
+		h.scopedAdminTest(c)
+		return
+	}
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")

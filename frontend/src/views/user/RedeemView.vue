@@ -75,6 +75,13 @@
               {{ submitting ? t('redeem.redeeming') : t('redeem.redeemButton') }}
             </button>
           </form>
+          <a
+            v-if="purchaseURL"
+            :href="purchaseURL"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mt-4 inline-block text-sm font-medium text-primary-600 hover:underline dark:text-primary-400"
+          >{{ t('redeem.purchaseCode') }}</a>
         </div>
       </div>
 
@@ -383,6 +390,7 @@ const subscriptionStore = useSubscriptionStore()
 
 const user = computed(() => authStore.user)
 
+const purchaseURL = ref('')
 const redeemCode = ref('')
 const submitting = ref(false)
 const redeemResult = ref<{
@@ -526,6 +534,7 @@ onMounted(async () => {
   try {
     const settings = await authAPI.getPublicSettings()
     contactInfo.value = settings.contact_info || ''
+    purchaseURL.value = settings.redeem_purchase_url || ''
   } catch (error) {
     console.error('Failed to load contact info:', error)
   }

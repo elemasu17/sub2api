@@ -50,6 +50,7 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 }
 
 func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
+	t.Setenv("ALLOW_OFFICIAL_BINARY_UPDATES", "true")
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{
@@ -146,6 +147,7 @@ func TestUpdateServiceListRollbackVersionsPropagatesFetchError(t *testing.T) {
 }
 
 func TestUpdateServiceRollbackToVersionRejectsDisallowedTargets(t *testing.T) {
+	t.Setenv("ALLOW_OFFICIAL_BINARY_UPDATES", "true")
 	releases := []*GitHubRelease{
 		{TagName: "v0.1.148"},
 		{TagName: "v0.1.147"},
@@ -171,6 +173,7 @@ func TestUpdateServiceRollbackToVersionRejectsDisallowedTargets(t *testing.T) {
 }
 
 func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
+	t.Setenv("ALLOW_OFFICIAL_BINARY_UPDATES", "true")
 	// No platform asset in the release: the target passes the allowlist check
 	// and fails later at asset lookup, proving the version itself was accepted.
 	releases := []*GitHubRelease{
