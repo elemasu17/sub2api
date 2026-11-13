@@ -1,0 +1,12 @@
+[Unit]
+Description=Encrypted local Sub2API backup
+After=network.target sub2api.service postgresql.service redis-server.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/sub2api-backup --label daily
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=1h

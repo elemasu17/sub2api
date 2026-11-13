@@ -1,0 +1,29 @@
+[Unit]
+Description=Sub2API native service
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=sub2api
+Group=sub2api
+WorkingDirectory=/opt/sub2api/current
+EnvironmentFile=/etc/sub2api/runtime.env
+Environment=DATA_DIR=/var/lib/sub2api
+Environment=ALLOW_OFFICIAL_BINARY_UPDATES=false
+ExecStart=/opt/sub2api/current/sub2api
+Restart=always
+RestartSec=5
+TimeoutStopSec=180
+LimitNOFILE=100000
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/sub2api /var/log/sub2api
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

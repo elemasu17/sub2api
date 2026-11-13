@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Sub2API local backup
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 Asia/Shanghai
+RandomizedDelaySec=300
+Persistent=true
+Unit=sub2api-backup.service
+
+[Install]
+WantedBy=timers.target
