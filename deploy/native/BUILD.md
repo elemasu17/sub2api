@@ -59,9 +59,12 @@ branches are left intact. Nothing merges or deploys automatically. Configure
 GitHub to allow Actions to create pull requests. An optional
 `UPSTREAM_SYNC_TOKEN` with repository contents and pull-request permissions
 allows generated PRs to trigger normal CI. With the default `GITHUB_TOKEN`,
-GitHub can suppress those triggers; validation must then be run manually before
-merge. Require the frontend/backend checks and account-integration contract
-checks in branch protection.
+GitHub suppresses those triggers, so the sync job explicitly dispatches
+`native-checks.yml` on the default branch with the review branch as its `ref`
+input. Inspect that Actions run before merging; it is not a pull-request event
+and does not replace all upstream CI or database restore validation. Require
+the frontend/backend checks and account-integration contract checks in branch
+protection.
 
 After review, release using a new `native-v...` tag. Retain custom runtime guards,
 native deployment files, and account integration contracts during upstream
