@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install a verified native release; retain data and refuse unsafe automatic rollback."""
 import argparse
+import datetime as dt
 import fcntl
 import hashlib
 import json
@@ -65,6 +66,26 @@ def activate(target, current):
     os.replace(pending, current)
 
 
+def record_deployment(root, record):
+    """Persist recovery information before activating an unproven release."""
+    descriptor, name = tempfile.mkstemp(prefix='.deployment-', dir=root)
+    pending = Path(name)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(record, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(pending, root / 'last-deployment.json')
+        directory = os.open(root, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
 def health(url, version):
     for _ in range(45):
         try:
@@ -104,24 +125,40 @@ def deploy(args):
             if active:
                 run(['systemctl', 'start', args.service])
             raise
+        record = {'version': manifest['version'], 'commit': manifest['commit'],
+                  'started_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+                  'previous_release': str(previous) if previous else None,
+                  'target_release': str(target), 'backup': backup,
+                  'migration_signature_before': before, 'phase': 'prepared'}
         try:
+            record_deployment(root, record)
             activate(target, current)
+            record['phase'] = 'activated'
+            record_deployment(root, record)
             run(['systemctl', 'start', args.service])
             if not health(args.health_url, manifest['version']):
                 raise RuntimeError('release health check failed')
+            record['migration_signature_after'] = migration_signature(args.database)
+            record['phase'] = 'completed'
+            record_deployment(root, record)
         except BaseException:
-            run(['systemctl', 'stop', args.service])
-            after = migration_signature(args.database)
-            if previous and before == after:
-                activate(previous, current)
-                run(['systemctl', 'start', args.service])
-                raise RuntimeError('new release failed; previous program restored with unchanged migrations')
-            raise RuntimeError('new release failed after database changes; service stopped, restore the recorded backup')
-        record = {'version': manifest['version'], 'commit': manifest['commit'],
-                  'previous_release': str(previous) if previous else None,
-                  'backup': backup, 'migration_signature_before': before,
-                  'migration_signature_after': migration_signature(args.database)}
-        (root / 'last-deployment.json').write_text(json.dumps(record, indent=2) + '\n')
+            # Nontransactional migrations may have changed indexes before their
+            # schema_migrations row was written. An unchanged signature does not
+            # prove that the old executable can safely use this database.
+            record['failed_phase'] = record['phase']
+            stopped = False
+            try:
+                run(['systemctl', 'stop', args.service])
+                stopped = True
+            finally:
+                record['phase'] = 'failed_stopped' if stopped else 'failed_stop_unconfirmed'
+                try:
+                    record['migration_signature_after'] = migration_signature(args.database)
+                except Exception:
+                    record['migration_signature_after'] = None
+                record_deployment(root, record)
+            raise RuntimeError('new release failed; service stopped without automatic rollback; '
+                               'inspect last-deployment.json and backup ' + backup) from None
         print(json.dumps(record))
     finally:
         if stage.exists():

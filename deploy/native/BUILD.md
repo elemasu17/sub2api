@@ -1,7 +1,7 @@
 # Native build and upstream updates
 
 Build on a workstation or CI runner with Node.js 24, pnpm 9, Go matching
-`backend/go.mod` (currently 1.27.3), Python 3, Git, and tar. No container runtime is
+`backend/go.mod` (currently 1.27.4), Python 3, Git, and tar. No container runtime is
 required to build or run the application. Backend integration tests use the
 upstream test infrastructure and may require its container runtime.
 
@@ -13,7 +13,7 @@ VERSION=0.2.21-aibj.1 OUTPUT_DIR=/absolute/path/to/artifacts ./deploy/native/bui
 
 `TARGET_ARCH` defaults to `amd64`; `arm64` is also accepted. If pnpm 9 is not on
 PATH, the script uses Corepack with pnpm 9.15.9. Go can select the exact toolchain
-through `GOTOOLCHAIN=go1.27.3`. Use a matching Node.js installation on PATH.
+through `GOTOOLCHAIN=go1.27.4`. Use a matching Node.js installation on PATH.
 
 The archive contains `sub2api`, `resources/`, `LICENSE`, and `manifest.json`.
 The manifest records the explicit custom version, source commit, build time,

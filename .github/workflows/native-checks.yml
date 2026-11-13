@@ -37,6 +37,8 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - name: Test native deployment failure boundaries
+        run: python3 -m unittest discover -s deploy/native/tests -v
       - name: Build Linux executable
         env:
           VERSION: 0.0.0-aibj-check
