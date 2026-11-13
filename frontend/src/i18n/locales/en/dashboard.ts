@@ -762,6 +762,7 @@ export default {
 
   // Redeem
   redeem: {
+    purchaseCode: 'Buy a redeem code',
     title: 'Redeem Code',
     description: 'Enter your redeem code to add balance or increase concurrency',
     currentBalance: 'Current Balance',

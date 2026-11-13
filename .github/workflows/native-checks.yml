@@ -1,0 +1,49 @@
+name: Native build and integration contract checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or commit to validate (for sync PRs created by GITHUB_TOKEN)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-checks-${{ github.event.pull_request.number || inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    if: github.repository == 'elemasu17/sub2api'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '9.15.9'
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Build Linux executable
+        env:
+          VERSION: 0.0.0-aibj-check
+          OUTPUT_DIR: ${{ runner.temp }}/native-check
+        run: deploy/native/build.sh
+      - name: Test purchase link and translations
+        run: pnpm --dir frontend exec vitest run src/views/user/__tests__/RedeemView.purchase.spec.ts src/i18n/__tests__/localeKeyCompleteness.spec.ts
+      - name: Test scoped lifecycle and update protection
+        working-directory: backend
+        run: go test -tags=unit ./internal/service ./internal/handler ./internal/handler/admin ./internal/handler/dto ./internal/pkg/adminaccess ./internal/pkg/openai -run 'TestScopedOpenAI|TestScopedAccountTest|TestOpenAIOAuthService|TestNativeRelease|TestRedeemPurchase|TestScopedAdmin|TestUpdateService|TestSystemHandler|TestPublicSettingsInjectionPayload|TestSettingHandler_GetPublicSettings' -count=1

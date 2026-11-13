@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -115,6 +117,10 @@ type OpenAIGenerateAuthURLRequest struct {
 func (h *OpenAIOAuthHandler) GenerateAuthURL(c *gin.Context) {
 	var req OpenAIGenerateAuthURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if adminaccess.RestrictedFromContext(c.Request.Context()) != nil && !errors.Is(err, io.EOF) {
+			response.BadRequest(c, "Invalid OAuth request")
+			return
+		}
 		// Allow empty body
 		req = OpenAIGenerateAuthURLRequest{}
 	}
@@ -126,7 +132,7 @@ func (h *OpenAIOAuthHandler) GenerateAuthURL(c *gin.Context) {
 		oauthPlatformFromPath(c),
 	)
 	if err != nil {
-		response.ErrorFrom(c, err)
+		scopedOpenAIError(c, err)
 		return
 	}
 
@@ -147,6 +153,10 @@ type OpenAIExchangeCodeRequest struct {
 func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 	var req OpenAIExchangeCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if adminaccess.RestrictedFromContext(c.Request.Context()) != nil {
+			response.BadRequest(c, "Invalid OAuth exchange request")
+			return
+		}
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -159,7 +169,7 @@ func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 		ProxyID:     req.ProxyID,
 	})
 	if err != nil {
-		response.ErrorFrom(c, err)
+		scopedOpenAIError(c, err)
 		return
 	}
 

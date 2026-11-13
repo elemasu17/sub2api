@@ -41,12 +41,14 @@ const (
 
 // OAuthSession stores OAuth flow state for OpenAI
 type OAuthSession struct {
-	State        string    `json:"state"`
-	CodeVerifier string    `json:"code_verifier"`
-	ClientID     string    `json:"client_id,omitempty"`
-	ProxyURL     string    `json:"proxy_url,omitempty"`
-	RedirectURI  string    `json:"redirect_uri"`
-	CreatedAt    time.Time `json:"created_at"`
+	OwnerKeyID      string    `json:"-"`
+	OwnerPolicyHash string    `json:"-"`
+	State           string    `json:"state"`
+	CodeVerifier    string    `json:"code_verifier"`
+	ClientID        string    `json:"client_id,omitempty"`
+	ProxyURL        string    `json:"proxy_url,omitempty"`
+	RedirectURI     string    `json:"redirect_uri"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // SessionStore manages OAuth sessions in memory
@@ -95,6 +97,18 @@ func (s *SessionStore) Delete(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, sessionID)
+}
+
+// Consume removes exactly the validated session, preventing concurrent replay.
+func (s *SessionStore) Consume(sessionID string, expected *OAuthSession) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[sessionID]
+	if !ok || session != expected || time.Since(session.CreatedAt) > SessionTTL {
+		return false
+	}
+	delete(s.sessions, sessionID)
+	return true
 }
 
 // Stop stops the cleanup goroutine
