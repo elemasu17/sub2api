@@ -34,7 +34,7 @@ var definitions = []permissionDefinition{
 	{Permission{"openai.tokens.refresh", "刷新调用方提供的 OpenAI 令牌（返回令牌，可使用所选代理）", "OAuth", "global"}, []string{"POST /openai/refresh-token"}},
 	{Permission{"openai.oauth.authorize", "发起及完成 OpenAI OAuth 授权（返回令牌，仅固定本机回调）", "OAuth", "global"}, []string{"POST /openai/generate-auth-url", "POST /openai/exchange-code"}},
 	{Permission{"accounts.read", "查看账户（脱敏）", "账户", "account"}, []string{"GET /accounts", "GET /accounts/:id", "GET /accounts/:id/models"}},
-	{Permission{"accounts.create", "创建账户", "账户", "account"}, []string{"POST /accounts", "POST /accounts/import/codex-session"}},
+	{Permission{"accounts.create", "创建账户", "账户", "account"}, []string{"POST /accounts", "POST /accounts/import/codex-session", "GET /accounts/import/codex-session/capabilities", "POST /accounts/import/codex-session/paused"}},
 	{Permission{"accounts.update", "编辑名称与备注", "账户", "account"}, []string{"PUT /accounts/:id"}},
 	{Permission{"accounts.credentials", "写入凭证（不包含读取）", "账户", "account"}, []string{"PUT /accounts/:id"}},
 	{Permission{"accounts.models.write", "编辑账户白名单模型 ID 与映射", "账户", "account"}, []string{"PUT /accounts/:id", "POST /accounts/bulk-update"}},

@@ -418,6 +418,9 @@ type CreateAccountInput struct {
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
+	// CreatePaused writes the initial row inactive and unschedulable. Internal
+	// onboarding callers opt in; existing account creation keeps its defaults.
+	CreatePaused bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
