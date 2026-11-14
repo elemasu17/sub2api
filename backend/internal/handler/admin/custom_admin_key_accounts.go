@@ -88,6 +88,14 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 	}
 	c.Abort()
 	base := "/api/v1/admin/accounts"
+	if path == base+"/import/codex-session/capabilities" && c.Request.Method == "GET" {
+		h.CodexSessionImportCapabilities(c)
+		return
+	}
+	if path == base+"/import/codex-session/paused" && c.Request.Method == "POST" {
+		h.ImportCodexSessionPaused(c)
+		return
+	}
 	if path == base+"/:id/test" && c.Request.Method == "POST" {
 		h.Test(c)
 		return

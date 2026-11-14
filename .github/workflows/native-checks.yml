@@ -39,6 +39,11 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Test native deployment failure boundaries
         run: python3 -m unittest discover -s deploy/native/tests -v
+      - name: Test paused first INSERT on native PostgreSQL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-16
+          python3 deploy/native/test-paused-import.py --pg-bin /usr/lib/postgresql/16/bin
       - name: Build Linux executable
         env:
           VERSION: 0.0.0-aibj-check
@@ -48,4 +53,4 @@ jobs:
         run: pnpm --dir frontend exec vitest run src/views/user/__tests__/RedeemView.purchase.spec.ts src/i18n/__tests__/localeKeyCompleteness.spec.ts
       - name: Test scoped lifecycle and update protection
         working-directory: backend
-        run: go test -tags=unit ./internal/service ./internal/handler ./internal/handler/admin ./internal/handler/dto ./internal/pkg/adminaccess ./internal/pkg/openai -run 'TestScopedOpenAI|TestScopedAccountTest|TestOpenAIOAuthService|TestNativeRelease|TestRedeemPurchase|TestScopedAdmin|TestUpdateService|TestSystemHandler|TestPublicSettingsInjectionPayload|TestSettingHandler_GetPublicSettings' -count=1
+        run: go test -tags=unit ./internal/service ./internal/handler ./internal/handler/admin ./internal/handler/dto ./internal/pkg/adminaccess ./internal/pkg/openai ./internal/server/middleware -run 'TestPausedCodex|TestScopedCodex|TestScopedOpenAI|TestScopedAccountTest|TestOpenAIOAuthService|TestNativeRelease|TestRedeemPurchase|TestScopedAdmin|TestUpdateService|TestSystemHandler|TestPublicSettingsInjectionPayload|TestSettingHandler_GetPublicSettings' -count=1

@@ -72,6 +72,11 @@ jobs:
         run: |
           make test-unit
           make test-integration
+      - name: Test paused first INSERT on native PostgreSQL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-16
+          python3 deploy/native/test-paused-import.py --pg-bin /usr/lib/postgresql/16/bin
       - name: Validate native archive
         env:
           OUTPUT_DIR: ${{ runner.temp }}/native-release
