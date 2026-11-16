@@ -39,6 +39,7 @@ func pausedImportRouter(h *AccountHandler, principal **adminaccess.Principal) *g
 	r.Use(h.ScopedAdminKeyAccounts)
 	r.GET("/api/v1/admin/accounts/import/codex-session/capabilities", h.CodexSessionImportCapabilities)
 	r.POST(pausedCodexImportPath, h.ImportCodexSessionPaused)
+	r.POST(unscheduledCodexImportPath, h.ImportCodexSessionUnscheduled)
 	r.POST("/api/v1/admin/accounts/import/codex-session", h.ImportCodexSession)
 	return r
 }

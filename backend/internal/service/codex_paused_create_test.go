@@ -20,3 +20,14 @@ func TestPausedCodexCreatePreservesLegacyDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestUnscheduledCodexCreateIsActiveWithoutScheduling(t *testing.T) {
+	input := &CreateAccountInput{Platform: PlatformOpenAI, Type: AccountTypeOAuth, CreateUnscheduled: true, Credentials: map[string]any{"access_token": "fixture"}}
+	account, err := buildAccountForCreate(input, map[string]any{})
+	require.NoError(t, err)
+	require.Equal(t, StatusActive, account.Status)
+	require.False(t, account.Schedulable)
+	input.CreatePaused = true
+	_, err = buildAccountForCreate(input, map[string]any{})
+	require.Error(t, err)
+}

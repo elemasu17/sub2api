@@ -16,11 +16,12 @@ import (
 
 type scopedCodexSessionImportRequest struct {
 	CodexSessionImportRequest
-	ProxyMode        string `json:"proxy_mode"`
-	RandomProxy      bool   `json:"random_proxy"`
-	CreatePaused     bool   `json:"create_paused"`
-	ContractVersion  int    `json:"contract_version"`
-	IdempotencyScope string `json:"idempotency_scope"`
+	ProxyMode         string `json:"proxy_mode"`
+	RandomProxy       bool   `json:"random_proxy"`
+	CreatePaused      bool   `json:"create_paused"`
+	CreateUnscheduled bool   `json:"create_unscheduled,omitempty"`
+	ContractVersion   int    `json:"contract_version"`
+	IdempotencyScope  string `json:"idempotency_scope"`
 }
 
 func validateScopedCodexRequest(req scopedCodexSessionImportRequest) error {
@@ -54,16 +55,16 @@ func validateScopedCodexRequest(req scopedCodexSessionImportRequest) error {
 }
 
 func (h *AccountHandler) scopedAdminImportCodexSession(c *gin.Context) {
-	h.scopedAdminImportCodexSessionMode(c, false)
+	h.scopedAdminImportCodexSessionMode(c, "legacy")
 }
 
-func (h *AccountHandler) scopedAdminImportCodexSessionMode(c *gin.Context, paused bool) {
+func (h *AccountHandler) scopedAdminImportCodexSessionMode(c *gin.Context, mode string) {
 	var req scopedCodexSessionImportRequest
 	if c.ShouldBindJSON(&req) != nil {
 		response.BadRequest(c, "导入请求格式无效")
 		return
 	}
-	if paused {
+	if mode == "paused" {
 		capability, err := h.pausedCodexImportCapabilities(c.Request.Context())
 		if err != nil {
 			response.ErrorFrom(c, err)
@@ -73,8 +74,18 @@ func (h *AccountHandler) scopedAdminImportCodexSessionMode(c *gin.Context, pause
 			response.ErrorFrom(c, err)
 			return
 		}
-	} else if req.CreatePaused || req.ContractVersion != 0 || req.IdempotencyScope != "" {
-		response.BadRequest(c, "Use the versioned paused import endpoint")
+	} else if mode == "unscheduled" {
+		capability, err := h.activeUnscheduledCodexImportCapabilities(c.Request.Context())
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if err = validateActiveUnscheduledCodexImport(req, c.GetHeader("Idempotency-Key"), capability); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	} else if req.CreatePaused || req.CreateUnscheduled || req.ContractVersion != 0 || req.IdempotencyScope != "" {
+		response.BadRequest(c, "Use the versioned Codex import endpoint")
 		return
 	}
 	if err := validateScopedCodexRequest(req); err != nil {
@@ -86,8 +97,8 @@ func (h *AccountHandler) scopedAdminImportCodexSessionMode(c *gin.Context, pause
 		response.BadRequest(c, "请输入有效的 accessToken 或 Codex session JSON")
 		return
 	}
-	if paused && len(entries) != 1 {
-		response.BadRequest(c, "Paused import requires exactly one account")
+	if mode != "legacy" && len(entries) != 1 {
+		response.BadRequest(c, "Versioned import requires exactly one account")
 		return
 	}
 	api, ok := h.adminService.(service.ScopedAdminCodexAccounts)
@@ -192,7 +203,7 @@ func (h *AccountHandler) importScopedCodexSessions(ctx context.Context, api serv
 			if req.Priority != nil {
 				priority = *req.Priority
 			}
-			account, err = api.ScopedAdminCreateCodex(ctx, &service.CreateAccountInput{CreatePaused: req.CreatePaused, ProxyMode: proxyMode, Name: name, Notes: req.Notes, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: credentials, Extra: extra, GroupIDs: req.GroupIDs, ProxyID: req.ProxyID, Concurrency: concurrency, Priority: priority, RateMultiplier: req.RateMultiplier, LoadFactor: req.LoadFactor, ExpiresAt: expires, AutoPauseOnExpired: autoPause, SkipDefaultGroupBind: true})
+			account, err = api.ScopedAdminCreateCodex(ctx, &service.CreateAccountInput{CreatePaused: req.CreatePaused, CreateUnscheduled: req.CreateUnscheduled, ProxyMode: proxyMode, Name: name, Notes: req.Notes, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: credentials, Extra: extra, GroupIDs: req.GroupIDs, ProxyID: req.ProxyID, Concurrency: concurrency, Priority: priority, RateMultiplier: req.RateMultiplier, LoadFactor: req.LoadFactor, ExpiresAt: expires, AutoPauseOnExpired: autoPause, SkipDefaultGroupBind: true})
 		}
 		if err != nil {
 			fail(entry.Index, err)

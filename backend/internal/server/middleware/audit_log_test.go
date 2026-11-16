@@ -153,8 +153,13 @@ func TestPasskeyLoginAuditUsesCanonicalLoginActionAndOmitsCredentialBody(t *test
 }
 
 func TestPausedCodexImportOmitsCredentialAuditBody(t *testing.T) {
+	testCodexImportOmitsCredentialAuditBody(t, "/api/v1/admin/accounts/import/codex-session/paused")
+}
+func TestUnscheduledCodexImportOmitsCredentialAuditBody(t *testing.T) {
+	testCodexImportOmitsCredentialAuditBody(t, "/api/v1/admin/accounts/import/codex-session/unscheduled")
+}
+func testCodexImportOmitsCredentialAuditBody(t *testing.T, path string) {
 	gin.SetMode(gin.TestMode)
-	path := "/api/v1/admin/accounts/import/codex-session/paused"
 	repository := &auditCaptureRepository{}
 	auditService := service.NewAuditLogService(repository, nil)
 	auditService.Start()

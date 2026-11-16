@@ -411,6 +411,9 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if input.CreatePaused && input.CreateUnscheduled {
+		return nil, errors.New("conflicting initial account states")
+	}
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
@@ -436,6 +439,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Priority:    input.Priority,
 		Status:      StatusActive,
 		Schedulable: true,
+	}
+	if input.CreateUnscheduled {
+		account.Schedulable = false
 	}
 	if input.CreatePaused {
 		account.Status = "inactive"
@@ -553,7 +559,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	AfterAccountCommit(ctx, func(_ context.Context) {
 		// OAuth 账号：创建后异步设置隐私。
 		// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-		if account.Type == AccountTypeOAuth && !input.CreatePaused {
+		if account.Type == AccountTypeOAuth && !input.CreatePaused && !input.CreateUnscheduled {
 			switch account.Platform {
 			case PlatformOpenAI:
 				go func() {
