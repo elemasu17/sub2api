@@ -160,6 +160,22 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 		return
 	}
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if path == base+"/:id/models/sync-upstream" && c.Request.Method == "POST" {
+		if !adminaccess.RouteAllowed(principal.Policy, c.Request.Method, path) {
+			response.Error(c, 403, "此路由未授权")
+			return
+		}
+		a, err := h.adminService.GetAccount(ctx, id)
+		resource := adminaccess.Account{ID: id, GroupIDs: accountGroupIDs(a), Type: accountType(a), Platform: accountPlatform(a)}
+		if err != nil || a == nil || !principal.Policy.AllowsAccount("accounts.models.write", resource) {
+			response.Error(c, 404, "账户不存在")
+			return
+		}
+		// The normal handler owns upstream error mapping and model catalog
+		// persistence. The scoped gate above only adds route and account scope.
+		h.SyncUpstreamModels(c)
+		return
+	}
 
 	if (path == base+"/:id" || path == base+"/:id/models") && c.Request.Method == "GET" {
 		a, err := h.adminService.GetAccount(ctx, id)

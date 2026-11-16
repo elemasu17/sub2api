@@ -37,7 +37,7 @@ var definitions = []permissionDefinition{
 	{Permission{"accounts.create", "创建账户", "账户", "account"}, []string{"POST /accounts", "POST /accounts/import/codex-session", "GET /accounts/import/codex-session/capabilities", "POST /accounts/import/codex-session/paused", "POST /accounts/import/codex-session/unscheduled"}},
 	{Permission{"accounts.update", "编辑名称与备注", "账户", "account"}, []string{"PUT /accounts/:id"}},
 	{Permission{"accounts.credentials", "写入凭证（不包含读取）", "账户", "account"}, []string{"PUT /accounts/:id"}},
-	{Permission{"accounts.models.write", "编辑账户白名单模型 ID 与映射", "账户", "account"}, []string{"PUT /accounts/:id", "POST /accounts/bulk-update"}},
+	{Permission{"accounts.models.write", "编辑账户白名单模型 ID、映射并同步上游模型目录", "账户", "account"}, []string{"PUT /accounts/:id", "POST /accounts/bulk-update", "POST /accounts/:id/models/sync-upstream"}},
 	{Permission{"accounts.network", "修改接入地址、代理与连接选项", "账户", "account"}, []string{"PUT /accounts/:id"}},
 	{Permission{"accounts.status", "启用、停用与调度开关", "账户", "account"}, []string{"PUT /accounts/:id", "POST /accounts/:id/schedulable"}},
 	{Permission{"accounts.schedule", "修改并发、优先级与有效期", "账户", "account"}, []string{"PUT /accounts/:id"}},
