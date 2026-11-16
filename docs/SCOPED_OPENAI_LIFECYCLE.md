@@ -4,7 +4,62 @@ The independent account manager uses a dedicated scoped admin API key in the
 `x-api-key` header. Keep the key and returned credentials on the server. This
 extension does not expose a browser token or require a full-access admin key.
 
-## Paused first import into one existing group
+## Active first import with scheduling disabled (v2)
+
+The C2 import path now creates an account with `status: "active"` and
+`schedulable: false` in its first database INSERT. It keeps the same group,
+creation transaction, scoped permissions and response format as v1. Ordinary
+account creation and the v1 `/paused` route retain their existing behavior.
+No migration or scoped-key policy expansion is required. The new route maps
+only to `accounts.create`; credential, schedule, optional network/model, and
+OpenAI/OAuth/group restrictions are rechecked by the existing scoped service.
+
+The capabilities response retains every v1 field below and adds:
+
+```json
+{
+  "active_unscheduled": {
+    "contract_version": 2,
+    "import_path": "/api/v1/admin/accounts/import/codex-session/unscheduled",
+    "status": "active",
+    "schedulable": false,
+    "idempotency_scope": "<64 lowercase hex characters>",
+    "idempotency_ttl_seconds": 86400
+  }
+}
+```
+
+POST only to the advertised v2 path with `create_unscheduled:true`,
+`contract_version:2`, `update_existing:false`, its own `idempotency_scope`, one
+positive group ID, one session and a persistent `Idempotency-Key`. Conflicting
+`create_paused`, v1 scope/version, missing scope/key, batches and legacy-route
+fallback are rejected. The v2 scope uses an independent namespace bound to the
+same key, policy, TTL and server secret. The new request flag is omitted when
+false so normalized v1 requests keep their durable idempotency fingerprints.
+Neither importer sends a creation-time privacy request or enables scheduling.
+
+An optional top-level `notes` string is saved on first creation and participates
+in the existing normalized idempotency fingerprint. C2 supplies only
+`原始订单号：<persisted primary order tradeNo>` when available, with a trade number
+of at most 100 characters and no control characters. It freezes that value with
+the first import intent; retries must not change it. Omitted notes retain the
+existing request behavior, and mapped credential replacement does not overwrite
+operator notes. Import audit logs omit the whole request body, including notes.
+
+Deploy Sub2API first, then the new GW. Old GW keeps its v1 inactive imports on
+this server; new GW rejects a server without v2 before binding its first intent.
+GW binds the initial intent to the path, version, status and schedule semantics;
+old or uncertain intents require reconciliation and must never receive a fresh
+key to replay under v2. A mapped credential replacement first disables scheduling,
+then atomically PUTs the credentials with `status:active,schedulable:false`.
+Verify and refresh disable scheduling without changing account status. Explicit
+pause still sets inactive; publish still enables active scheduling.
+
+The disposable PostgreSQL validation command below exercises both versions with
+real authentication, repositories and a trigger checking their initial INSERT.
+It also verifies replay does not rewrite account state or touch unrelated accounts.
+
+## Paused first import into one existing group (v1 compatibility)
 
 Reuse the configured OpenAI OAuth group for both pending and enabled accounts.
 No migration or separate staging group is needed. The external manager must

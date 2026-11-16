@@ -381,6 +381,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/import/codex-session", h.Admin.Account.ImportCodexSession)
 		accounts.GET("/import/codex-session/capabilities", h.Admin.Account.CodexSessionImportCapabilities)
 		accounts.POST("/import/codex-session/paused", h.Admin.Account.ImportCodexSessionPaused)
+		accounts.POST("/import/codex-session/unscheduled", h.Admin.Account.ImportCodexSessionUnscheduled)
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
 		accounts.PUT("/:id", h.Admin.Account.Update)

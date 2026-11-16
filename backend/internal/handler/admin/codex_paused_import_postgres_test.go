@@ -59,6 +59,16 @@ func (f *pausedImportModelFixture) DoWithTLS(*http.Request, string, int64, int, 
 // Uses an isolated synthetic schema and the actual HTTP -> service -> repository
 // chain. No upstream OAuth or model request is needed or allowed by this flow.
 func TestPausedCodexImportPostgresInitialRowAndReplay(t *testing.T) {
+	testCodexImportPostgresInitialRowAndReplay(t, false)
+}
+func TestUnscheduledCodexImportPostgresInitialRowAndReplay(t *testing.T) {
+	testCodexImportPostgresInitialRowAndReplay(t, true)
+}
+func testCodexImportPostgresInitialRowAndReplay(t *testing.T, unscheduled bool) {
+	importPath, initialStatus := pausedCodexImportPath, "inactive"
+	if unscheduled {
+		importPath, initialStatus = unscheduledCodexImportPath, service.StatusActive
+	}
 	dsn := os.Getenv("SCOPED_ADMIN_TEST_DSN")
 	if dsn == "" {
 		t.Skip("requires independent SCOPED_ADMIN_TEST_DSN")
@@ -154,6 +164,7 @@ func TestPausedCodexImportPostgresInitialRowAndReplay(t *testing.T) {
 	router.Use(h.ScopedAdminKeyAccounts)
 	router.GET("/api/v1/admin/accounts/import/codex-session/capabilities", h.CodexSessionImportCapabilities)
 	router.POST(pausedCodexImportPath, h.ImportCodexSessionPaused)
+	router.POST(unscheduledCodexImportPath, h.ImportCodexSessionUnscheduled)
 	router.GET("/api/v1/admin/unknown", func(c *gin.Context) { t.Fatal("unregistered permission must be denied") })
 	call := func(method, path, idempotencyKey string, body any) *httptest.ResponseRecorder {
 		t.Helper()
@@ -182,7 +193,7 @@ func TestPausedCodexImportPostgresInitialRowAndReplay(t *testing.T) {
 	_, err = db.Exec(`CREATE TABLE observed_initial_account(id bigint, status text, schedulable boolean);
 CREATE FUNCTION capture_paused_initial_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
  IF NEW.name = 'paused-fixture' THEN
-  IF NEW.status <> 'inactive' OR NEW.schedulable THEN RAISE EXCEPTION 'unsafe initial account state'; END IF;
+  IF NEW.status <> '` + initialStatus + `' OR NEW.schedulable THEN RAISE EXCEPTION 'unsafe initial account state'; END IF;
   INSERT INTO observed_initial_account VALUES (NEW.id,NEW.status,NEW.schedulable);
  END IF;
  RETURN NEW;
@@ -196,8 +207,30 @@ CREATE TRIGGER observe_initial_account AFTER INSERT ON accounts FOR EACH ROW EXE
 	}
 	require.NoError(t, json.Unmarshal(capabilityResponse.Body.Bytes(), &capability))
 	body := pausedImportBody(capability.Data.IdempotencyScope)
+	if unscheduled {
+		require.NotNil(t, capability.Data.ActiveUnscheduled)
+		body = unscheduledImportBody(capability.Data.ActiveUnscheduled.IdempotencyScope)
+		body["notes"] = "原始订单号：order-notes-fixture"
+	}
+	// Route permission does not broaden the account or group resource scope.
+	deniedBody := make(map[string]any, len(body))
+	for key, value := range body {
+		deniedBody[key] = value
+	}
+	deniedBody["group_ids"] = []int64{unused.ID}
+	deniedImport := call("POST", importPath, "out-of-scope-import", deniedBody)
+	require.Equal(t, 200, deniedImport.Code, deniedImport.Body.String())
+	var deniedResult struct {
+		Data CodexSessionImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(deniedImport.Body.Bytes(), &deniedResult))
+	require.Equal(t, 0, deniedResult.Data.Created)
+	require.Equal(t, 1, deniedResult.Data.Failed)
+	var unchangedCount int
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM accounts").Scan(&unchangedCount))
+	require.Equal(t, 1, unchangedCount)
 	body["group_ids"] = []int64{group.ID}
-	first := call("POST", pausedCodexImportPath, "durable-first-import", body)
+	first := call("POST", importPath, "durable-first-import", body)
 	require.Equal(t, 200, first.Code, first.Body.String())
 	var envelope struct {
 		Data CodexSessionImportResult `json:"data"`
@@ -210,12 +243,26 @@ CREATE TRIGGER observe_initial_account AFTER INSERT ON accounts FOR EACH ROW EXE
 	var status string
 	var schedulable bool
 	require.NoError(t, db.QueryRow("SELECT status,schedulable FROM observed_initial_account WHERE id=$1", id).Scan(&status, &schedulable))
-	require.Equal(t, "inactive", status)
+	require.Equal(t, initialStatus, status)
 	require.False(t, schedulable)
+	if unscheduled {
+		var notes string
+		require.NoError(t, db.QueryRow("SELECT notes FROM accounts WHERE id=$1", id).Scan(&notes))
+		require.Equal(t, body["notes"], notes)
+		changedNotes := make(map[string]any, len(body))
+		for key, value := range body {
+			changedNotes[key] = value
+		}
+		changedNotes["notes"] = "原始订单号：another-order"
+		conflict := call("POST", importPath, "durable-first-import", changedNotes)
+		require.Equal(t, 409, conflict.Code, "notes must remain bound to the original import fingerprint")
+		require.NoError(t, db.QueryRow("SELECT notes FROM accounts WHERE id=$1", id).Scan(&notes))
+		require.Equal(t, body["notes"], notes)
+	}
 	// Replay after a separate status edit must not create, enable, pause or otherwise mutate the row.
 	_, err = db.Exec("UPDATE accounts SET status='error',schedulable=false WHERE id=$1", id)
 	require.NoError(t, err)
-	replay := call("POST", pausedCodexImportPath, "durable-first-import", body)
+	replay := call("POST", importPath, "durable-first-import", body)
 	require.Equal(t, 200, replay.Code, replay.Body.String())
 	require.Equal(t, "true", replay.Header().Get("X-Idempotency-Replayed"))
 	require.JSONEq(t, first.Body.String(), replay.Body.String())

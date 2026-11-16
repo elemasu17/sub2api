@@ -39,7 +39,7 @@ def main():
                 subprocess.run([args.pg_bin / 'createdb', '-h', socket, '-p', '55484', 'paused_import_test'], check=True)
                 env = dict(os.environ, SCOPED_ADMIN_TEST_DSN=f'host={socket} port=55484 dbname=paused_import_test sslmode=disable')
                 subprocess.run(['go', 'test', '-tags=unit', './internal/handler/admin', '-run',
-                                '^TestPausedCodexImportPostgres', '-count=1', '-v'], cwd=root / 'backend', env=env, check=True)
+                                '^Test(Paused|Unscheduled)CodexImportPostgres', '-count=1', '-v'], cwd=root / 'backend', env=env, check=True)
             finally:
                 subprocess.run([args.pg_bin / 'pg_ctl', '-D', data, '-m', 'immediate', '-w', 'stop'],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

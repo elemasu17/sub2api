@@ -18,11 +18,12 @@ import (
 const pausedCodexImportPath = "/api/v1/admin/accounts/import/codex-session/paused"
 
 type codexImportCapabilities struct {
-	CreatePaused          bool   `json:"create_paused"`
-	ContractVersion       int    `json:"contract_version"`
-	ImportPath            string `json:"import_path"`
-	IdempotencyScope      string `json:"idempotency_scope"`
-	IdempotencyTTLSeconds int64  `json:"idempotency_ttl_seconds"`
+	ActiveUnscheduled     *activeUnscheduledCodexImportCapability `json:"active_unscheduled,omitempty"`
+	CreatePaused          bool                                    `json:"create_paused"`
+	ContractVersion       int                                     `json:"contract_version"`
+	ImportPath            string                                  `json:"import_path"`
+	IdempotencyScope      string                                  `json:"idempotency_scope"`
+	IdempotencyTTLSeconds int64                                   `json:"idempotency_ttl_seconds"`
 }
 
 // This fingerprint is a retry boundary, not an ownership or authorization token.
@@ -54,7 +55,7 @@ func (h *AccountHandler) pausedCodexImportCapabilities(ctx context.Context) (*co
 }
 
 func validatePausedCodexImport(req scopedCodexSessionImportRequest, key string, capability *codexImportCapabilities) error {
-	if !req.CreatePaused || req.ContractVersion != capability.ContractVersion || req.UpdateExisting == nil || *req.UpdateExisting || len(req.GroupIDs) != 1 || req.GroupIDs[0] <= 0 {
+	if !req.CreatePaused || req.CreateUnscheduled || req.ContractVersion != capability.ContractVersion || req.UpdateExisting == nil || *req.UpdateExisting || len(req.GroupIDs) != 1 || req.GroupIDs[0] <= 0 {
 		return infraerrors.BadRequest("SCOPED_CODEX_PAUSED_CONTRACT", "Paused import requires version 1, create_paused=true, update_existing=false and one group")
 	}
 	if len(req.IdempotencyScope) != 64 || !hmac.Equal([]byte(req.IdempotencyScope), []byte(capability.IdempotencyScope)) {
@@ -70,10 +71,15 @@ func validatePausedCodexImport(req scopedCodexSessionImportRequest, key string, 
 	return nil
 }
 
-// CodexSessionImportCapabilities advertises only the guarded, paused-only path.
+// CodexSessionImportCapabilities keeps the v1 contract intact and adds v2 support.
 func (h *AccountHandler) CodexSessionImportCapabilities(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	capability, err := h.pausedCodexImportCapabilities(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	capability.ActiveUnscheduled, err = h.activeUnscheduledCodexImportCapabilities(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -84,5 +90,5 @@ func (h *AccountHandler) CodexSessionImportCapabilities(c *gin.Context) {
 // ImportCodexSessionPaused is separate from the legacy route so a downgrade
 // between capability discovery and POST cannot silently create an active row.
 func (h *AccountHandler) ImportCodexSessionPaused(c *gin.Context) {
-	h.scopedAdminImportCodexSessionMode(c, true)
+	h.scopedAdminImportCodexSessionMode(c, "paused")
 }

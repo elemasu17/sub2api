@@ -96,6 +96,10 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 		h.ImportCodexSessionPaused(c)
 		return
 	}
+	if path == base+"/import/codex-session/unscheduled" && c.Request.Method == "POST" {
+		h.ImportCodexSessionUnscheduled(c)
+		return
+	}
 	if path == base+"/:id/test" && c.Request.Method == "POST" {
 		h.Test(c)
 		return
