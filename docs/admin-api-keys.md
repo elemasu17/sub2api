@@ -114,6 +114,7 @@
 - 必须明确提供 `group_ids`；新账户固定为 `openai` 平台、`oauth` 类型，目标分组逐一检查。
 - 新建需要 `accounts.create`、`accounts.credentials` 和 `accounts.schedule`。更新匹配账户会重新检查当前资源和对应写权限；调整关联还需要 `accounts.groups`。
 - `base_url`、代理、指纹或 WebSocket 连接配置需要 `accounts.network`；`model_mapping` 需要 `accounts.models.write`。
+- `POST /api/v1/admin/accounts/:id/models/sync-upstream` 使用 `accounts.models.write`，并再次按账户的分组、平台和类型规则校验；它只同步该账户的上游模型能力，不授予读取其他账户或全局模型目录的权限。
 - `credential_extras` 只接受独立授权的 `base_url`、`model_mapping`；`extra` 只开放已登记的 Codex 指纹及 WebSocket 选项，不支持任意字段透传或跳过混合渠道风险检查。
 - 导入只按当前条目的身份查询受限候选，响应不返回候选凭证。更新已有账户时仍会在写入阶段重验身份与权限。
 

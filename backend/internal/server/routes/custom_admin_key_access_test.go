@@ -208,12 +208,16 @@ func TestScopedAdminRegisteredLegacyModelInterfaces(t *testing.T) {
 				{"GET", "/api/v1/admin/accounts/2/models", "", 404},
 				{"GET", "/api/v1/admin/accounts/3/models", "", 404},
 				{"GET", "/api/v1/admin/accounts/4/models", "", 404},
+				{"POST", "/api/v1/admin/accounts/1/models/sync-upstream", "", 500},
+				{"POST", "/api/v1/admin/accounts/3/models/sync-upstream", "", 404},
 				{"GET", "/api/v1/admin/accounts/1", "", 200},
 				{"POST", "/api/v1/admin/accounts/bulk-update", `{"account_ids":[1],"credentials":{"model_mapping":{"custom-model":"upstream-model"}}}`, 200},
 				{"PUT", "/api/v1/admin/accounts/1", `{"credentials":{"model_mapping":{"custom-model":"upstream-model"}}}`, 200},
 			} {
 				want := tc.want
-				if (tc.method == "GET" && permission != "accounts.read") || (tc.method != "GET" && permission != "accounts.models.write") {
+				if tc.path == "/api/v1/admin/accounts/3/models/sync-upstream" && permission == "accounts.models.write" {
+					want = 404
+				} else if (tc.method == "GET" && permission != "accounts.read") || (tc.method != "GET" && permission != "accounts.models.write") {
 					want = 403
 				}
 				req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))

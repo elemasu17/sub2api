@@ -34,12 +34,15 @@ func TestScopedAdminModelPermissionsAreIndependent(t *testing.T) {
 		require.False(t, RouteAllowed(write, "GET", path))
 		require.False(t, RouteAllowed(Policy{}, "GET", path))
 	}
-	for _, policy := range []Policy{write, read} {
-		require.False(t, RouteAllowed(policy, "PUT", "/api/v1/admin/model-catalog/:platform"))
-		require.False(t, RouteAllowed(policy, "DELETE", "/api/v1/admin/model-catalog/:platform"))
-		require.False(t, RouteAllowed(policy, "GET", "/api/v1/admin/accounts/:id/models"))
-		require.False(t, RouteAllowed(policy, "POST", "/api/v1/admin/accounts/:id/models/sync-upstream"))
-	}
+	require.False(t, RouteAllowed(write, "PUT", "/api/v1/admin/model-catalog/:platform"))
+	require.False(t, RouteAllowed(write, "DELETE", "/api/v1/admin/model-catalog/:platform"))
+	require.False(t, RouteAllowed(write, "GET", "/api/v1/admin/accounts/:id/models"))
+	require.True(t, RouteAllowed(write, "POST", "/api/v1/admin/accounts/:id/models/sync-upstream"))
+	require.False(t, RouteAllowed(read, "PUT", "/api/v1/admin/model-catalog/:platform"))
+	require.False(t, RouteAllowed(read, "DELETE", "/api/v1/admin/model-catalog/:platform"))
+	require.False(t, RouteAllowed(read, "GET", "/api/v1/admin/accounts/:id/models"))
+	require.False(t, RouteAllowed(read, "POST", "/api/v1/admin/accounts/:id/models/sync-upstream"))
+	require.False(t, RouteAllowed(Policy{}, "POST", "/api/v1/admin/accounts/:id/models/sync-upstream"))
 }
 
 func TestScopedAdminPolicyAccountRulesNeverCrossProduct(t *testing.T) {
