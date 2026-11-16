@@ -210,6 +210,7 @@ CREATE TRIGGER observe_initial_account AFTER INSERT ON accounts FOR EACH ROW EXE
 	if unscheduled {
 		require.NotNil(t, capability.Data.ActiveUnscheduled)
 		body = unscheduledImportBody(capability.Data.ActiveUnscheduled.IdempotencyScope)
+		body["notes"] = "原始订单号：order-notes-fixture"
 	}
 	// Route permission does not broaden the account or group resource scope.
 	deniedBody := make(map[string]any, len(body))
@@ -244,6 +245,20 @@ CREATE TRIGGER observe_initial_account AFTER INSERT ON accounts FOR EACH ROW EXE
 	require.NoError(t, db.QueryRow("SELECT status,schedulable FROM observed_initial_account WHERE id=$1", id).Scan(&status, &schedulable))
 	require.Equal(t, initialStatus, status)
 	require.False(t, schedulable)
+	if unscheduled {
+		var notes string
+		require.NoError(t, db.QueryRow("SELECT notes FROM accounts WHERE id=$1", id).Scan(&notes))
+		require.Equal(t, body["notes"], notes)
+		changedNotes := make(map[string]any, len(body))
+		for key, value := range body {
+			changedNotes[key] = value
+		}
+		changedNotes["notes"] = "原始订单号：another-order"
+		conflict := call("POST", importPath, "durable-first-import", changedNotes)
+		require.Equal(t, 409, conflict.Code, "notes must remain bound to the original import fingerprint")
+		require.NoError(t, db.QueryRow("SELECT notes FROM accounts WHERE id=$1", id).Scan(&notes))
+		require.Equal(t, body["notes"], notes)
+	}
 	// Replay after a separate status edit must not create, enable, pause or otherwise mutate the row.
 	_, err = db.Exec("UPDATE accounts SET status='error',schedulable=false WHERE id=$1", id)
 	require.NoError(t, err)

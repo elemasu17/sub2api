@@ -38,6 +38,14 @@ same key, policy, TTL and server secret. The new request flag is omitted when
 false so normalized v1 requests keep their durable idempotency fingerprints.
 Neither importer sends a creation-time privacy request or enables scheduling.
 
+An optional top-level `notes` string is saved on first creation and participates
+in the existing normalized idempotency fingerprint. C2 supplies only
+`原始订单号：<persisted primary order tradeNo>` when available, with a trade number
+of at most 100 characters and no control characters. It freezes that value with
+the first import intent; retries must not change it. Omitted notes retain the
+existing request behavior, and mapped credential replacement does not overwrite
+operator notes. Import audit logs omit the whole request body, including notes.
+
 Deploy Sub2API first, then the new GW. Old GW keeps its v1 inactive imports on
 this server; new GW rejects a server without v2 before binding its first intent.
 GW binds the initial intent to the path, version, status and schedule semantics;

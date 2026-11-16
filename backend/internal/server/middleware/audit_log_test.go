@@ -171,7 +171,7 @@ func testCodexImportOmitsCredentialAuditBody(t *testing.T, path string) {
 	})
 	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
 	router.POST(path, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"created": 1}) })
-	request := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"content":"{\"access_token\":\"paused-audit-canary\"}"}`))
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"content":"{\"access_token\":\"paused-audit-canary\"}","notes":"原始订单号：notes-audit-canary"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -183,6 +183,7 @@ func testCodexImportOmitsCredentialAuditBody(t *testing.T, path string) {
 	require.Len(t, logs, 1)
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "paused-audit-canary")
+	require.NotContains(t, logs[0].RequestBody, "notes-audit-canary")
 }
 
 // Ollama 会话保存的请求体整体就是浏览器 Cookie 明文，键级脱敏清单曾漏掉裸键
