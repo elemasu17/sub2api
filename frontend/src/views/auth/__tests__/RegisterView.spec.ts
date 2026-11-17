@@ -283,6 +283,30 @@ describe('RegisterView', () => {
     )
   })
 
+  it('shows the backend suffix allowlist error and keeps it visible in the form', async () => {
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      turnstile_enabled: false,
+      registration_email_suffix_whitelist: []
+    })
+    registerMock.mockRejectedValueOnce({
+      reason: 'EMAIL_SUFFIX_NOT_ALLOWED',
+      message: 'email suffix is not allowed',
+      metadata: { allowed_suffixes: '@allowed.com,*.edu.cn' }
+    })
+
+    const wrapper = mountRegister()
+    await flushPromises()
+    await wrapper.get('#email').setValue('blocked@example.com')
+    await wrapper.get('#password').setValue('secret-123')
+    await wrapper.get('#confirmPassword').setValue('secret-123')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(showErrorMock).toHaveBeenCalledWith('auth.emailSuffixNotAllowedWithAllowed')
+    expect(wrapper.get('[role="alert"]').text()).toContain('auth.emailSuffixNotAllowedWithAllowed')
+  })
+
   // 域名限量注册开关默认关闭：恢复 PR5423 之前的客户端白名单预检，非白名单域名不发起注册请求。
   it('rejects a non-whitelist email domain locally when the domain quota switch is disabled', async () => {
     getPublicSettingsMock.mockResolvedValueOnce({

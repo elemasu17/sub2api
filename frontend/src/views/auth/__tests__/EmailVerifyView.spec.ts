@@ -383,6 +383,40 @@ describe('EmailVerifyView', () => {
     )
   })
 
+  it('shows the backend suffix allowlist error and keeps it visible in the form', async () => {
+    getPublicSettingsMock.mockResolvedValue({
+      turnstile_enabled: false,
+      turnstile_site_key: '',
+      site_name: 'Sub2API',
+      registration_email_suffix_whitelist: [],
+    })
+    sendVerifyCodeMock.mockRejectedValueOnce({
+      reason: 'EMAIL_SUFFIX_NOT_ALLOWED',
+      message: 'email suffix is not allowed',
+      metadata: { allowed_suffixes: '@allowed.com,*.edu.cn' },
+    })
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({ email: 'user@blocked.example', password: 'secret-123' })
+    )
+
+    const wrapper = mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: true,
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(showErrorMock).toHaveBeenLastCalledWith('auth.emailSuffixNotAllowedWithAllowed')
+    expect(wrapper.get('[role="alert"]').text()).toContain('auth.emailSuffixNotAllowedWithAllowed')
+  })
+
   it('shows the localized domain quota message when verified registration is rejected', async () => {
     getPublicSettingsMock.mockResolvedValue({
       turnstile_enabled: false,

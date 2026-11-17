@@ -143,7 +143,7 @@ export default {
       "category": "Accounts"
     },
     "accounts_dmodels_dwrite": {
-      "label": "Edit account model allowlist IDs and mappings",
+      "label": "Edit account model allowlist IDs, mappings, and sync upstream catalogs",
       "category": "Accounts"
     },
     "accounts_dnetwork": {

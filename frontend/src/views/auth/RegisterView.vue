@@ -11,6 +11,19 @@
         </p>
       </div>
 
+      <div
+        v-if="errorMessage"
+        role="alert"
+        class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20"
+      >
+        <div class="flex items-start gap-3">
+          <div class="flex-shrink-0">
+            <Icon name="xCircle" size="md" class="text-red-500" />
+          </div>
+          <p class="text-sm text-red-700 dark:text-red-400">{{ errorMessage }}</p>
+        </div>
+      </div>
+
       <!-- Registration Disabled Message -->
       <div
         v-if="!registrationEnabled && settingsLoaded"
@@ -50,6 +63,9 @@
               :placeholder="t('auth.emailPlaceholder')"
             />
           </div>
+          <p v-if="errors.email" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
+            {{ errors.email }}
+          </p>
         </div>
 
         <!-- Password Input -->
@@ -387,7 +403,7 @@ import {
   validateInvitationCode
 } from '@/api/auth'
 import { buildAuthErrorMessage } from '@/utils/authError'
-import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMetadata, extractI18nErrorMessage } from '@/utils/apiError'
 import {
   formatRegistrationEmailSuffixWhitelistForMessage,
   isRegistrationEmailSuffixAllowed,
@@ -906,9 +922,9 @@ function validateEmail(email: string): boolean {
   return emailRegex.test(email)
 }
 
-function buildEmailSuffixNotAllowedMessage(): string {
+function buildEmailSuffixNotAllowedMessage(whitelist = registrationEmailSuffixWhitelist.value): string {
   const normalizedWhitelist = normalizeRegistrationEmailSuffixWhitelist(
-    registrationEmailSuffixWhitelist.value
+    whitelist
   )
   if (normalizedWhitelist.length === 0) {
     return t('auth.emailSuffixNotAllowed')
@@ -920,6 +936,14 @@ function buildEmailSuffixNotAllowedMessage(): string {
       more: (count) => t('auth.emailSuffixAllowedMore', { count })
     })
   })
+}
+
+function buildEmailSuffixNotAllowedMessageFromError(error: unknown): string {
+  const metadata = extractApiErrorMetadata(error)
+  const allowedSuffixes = typeof metadata?.allowed_suffixes === 'string'
+    ? metadata.allowed_suffixes.split(',').map((suffix) => suffix.trim()).filter(Boolean)
+    : undefined
+  return buildEmailSuffixNotAllowedMessage(allowedSuffixes)
 }
 
 function validateForm(): boolean {
@@ -1109,10 +1133,14 @@ async function handleRegister(): Promise<void> {
 }
 
 function buildRegistrationErrorMessage(error: unknown, fallback: string): string {
-  if (extractApiErrorCode(error) === 'EMAIL_DOMAIN_REGISTRATION_LIMIT') {
+  const code = extractApiErrorCode(error)
+  if (code === 'EMAIL_DOMAIN_REGISTRATION_LIMIT') {
     return t('auth.emailDomainRegistrationLimit')
   }
-  if (extractApiErrorCode(error) === 'EMAIL_BLOCKED') {
+  if (code === 'EMAIL_SUFFIX_NOT_ALLOWED') {
+    return buildEmailSuffixNotAllowedMessageFromError(error)
+  }
+  if (code === 'EMAIL_BLOCKED') {
     return t('auth.errors.EMAIL_BLOCKED')
   }
   return buildAuthErrorMessage(error, { fallback })

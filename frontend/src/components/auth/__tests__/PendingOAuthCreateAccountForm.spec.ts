@@ -16,7 +16,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string) => key,
+      locale: { value: 'en' }
     })
   }
 })
@@ -260,7 +261,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     })
   })
 
-  it('shows send-code failures via toast without rendering inline error text', async () => {
+  it('shows send-code failures via toast and keeps the error visible inline', async () => {
     sendPendingOAuthVerifyCode.mockRejectedValue(new Error('send failed'))
 
     const wrapper = mount(PendingOAuthCreateAccountForm, {
@@ -276,7 +277,36 @@ describe('PendingOAuthCreateAccountForm', () => {
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('send failed')
-    expect(wrapper.text()).not.toContain('send failed')
+    expect(wrapper.get('[role="alert"]').text()).toContain('send failed')
+  })
+
+  it('localizes a suffix allowlist rejection from the backend', async () => {
+    getPublicSettings.mockResolvedValue({
+      email_verify_enabled: true,
+      turnstile_enabled: false,
+      turnstile_site_key: '',
+      registration_email_suffix_whitelist: ['allowed.com']
+    })
+    sendPendingOAuthVerifyCode.mockRejectedValue({
+      reason: 'EMAIL_SUFFIX_NOT_ALLOWED',
+      message: 'email suffix is not allowed',
+      metadata: { allowed_suffixes: '@allowed.com,*.edu.cn' }
+    })
+
+    const wrapper = mount(PendingOAuthCreateAccountForm, {
+      props: {
+        testIdPrefix: 'linuxdo',
+        initialEmail: 'user@blocked.example',
+        isSubmitting: false
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="linuxdo-create-account-send-code"]').trigger('click')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith('auth.emailSuffixNotAllowedWithAllowed')
+    expect(wrapper.get('[role="alert"]').text()).toContain('auth.emailSuffixNotAllowedWithAllowed')
   })
 
   it('consumes the captcha proof when sending a verify code fails', async () => {

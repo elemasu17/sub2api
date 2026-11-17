@@ -143,7 +143,7 @@ export default {
       "category": "账户"
     },
     "accounts_dmodels_dwrite": {
-      "label": "编辑账户白名单模型 ID 与映射",
+      "label": "编辑账户白名单模型 ID、映射并同步上游模型目录",
       "category": "账户"
     },
     "accounts_dnetwork": {

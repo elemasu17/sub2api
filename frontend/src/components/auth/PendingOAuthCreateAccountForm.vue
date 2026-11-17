@@ -61,7 +61,14 @@
         }}
       </button>
     </div>
-    <p v-if="emailVerifyEnabled && sendCodeSuccess" class="text-sm text-green-600 dark:text-green-400">
+    <p
+      v-if="emailVerifyEnabled && sendCodeError"
+      role="alert"
+      class="text-sm text-red-600 dark:text-red-400"
+    >
+      {{ sendCodeError }}
+    </p>
+    <p v-else-if="emailVerifyEnabled && sendCodeSuccess" class="text-sm text-green-600 dark:text-green-400">
       {{ t('auth.codeSentSuccess') }}
     </p>
     <p v-else-if="emailVerifyEnabled" class="text-xs text-gray-500 dark:text-dark-400">
@@ -102,6 +109,11 @@ import { useI18n } from 'vue-i18n'
 import TurnstileWidget from '@/components/CaptchaChallenge.vue'
 import { getPublicSettings, sendPendingOAuthVerifyCode } from '@/api/auth'
 import { useAppStore } from '@/stores'
+import { extractApiErrorCode, extractApiErrorMetadata } from '@/utils/apiError'
+import {
+  formatRegistrationEmailSuffixWhitelistForMessage,
+  normalizeRegistrationEmailSuffixWhitelist
+} from '@/utils/registrationEmailPolicy'
 
 export type PendingOAuthCreateAccountPayload = {
   email: string
@@ -125,7 +137,7 @@ const emit = defineEmits<{
   switchToBind: [email: string]
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 
 const email = ref('')
@@ -147,6 +159,7 @@ const aliyunCaptchaEnabled = ref(false)
 const aliyunCaptchaSceneId = ref('')
 const aliyunCaptchaPrefix = ref('')
 const aliyunCaptchaRegion = ref('cn')
+const registrationEmailSuffixWhitelist = ref<string[]>([])
 const turnstileToken = ref('')
 const tencentCaptchaRandstr = ref('')
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
@@ -222,7 +235,35 @@ function startCountdown(seconds: number) {
   }, 1000)
 }
 
+function buildEmailSuffixNotAllowedMessage(whitelist = registrationEmailSuffixWhitelist.value): string {
+  const normalizedWhitelist = normalizeRegistrationEmailSuffixWhitelist(whitelist)
+  if (normalizedWhitelist.length === 0) {
+    return t('auth.emailSuffixNotAllowed')
+  }
+  const separator = String(locale.value || '').toLowerCase().startsWith('zh') ? '、' : ', '
+  return t('auth.emailSuffixNotAllowedWithAllowed', {
+    suffixes: formatRegistrationEmailSuffixWhitelistForMessage(normalizedWhitelist, {
+      separator,
+      more: count => t('auth.emailSuffixAllowedMore', { count })
+    })
+  })
+}
+
 function getRequestErrorMessage(error: unknown, fallback: string): string {
+  const code = extractApiErrorCode(error)
+  if (code === 'EMAIL_SUFFIX_NOT_ALLOWED') {
+    const metadata = extractApiErrorMetadata(error)
+    const allowedSuffixes = typeof metadata?.allowed_suffixes === 'string'
+      ? metadata.allowed_suffixes.split(',').map(suffix => suffix.trim()).filter(Boolean)
+      : undefined
+    return buildEmailSuffixNotAllowedMessage(allowedSuffixes)
+  }
+  if (code === 'EMAIL_DOMAIN_REGISTRATION_LIMIT') {
+    return t('auth.emailDomainRegistrationLimit')
+  }
+  if (code === 'EMAIL_BLOCKED') {
+    return t('auth.errors.EMAIL_BLOCKED')
+  }
   const err = error as { message?: string; response?: { data?: { detail?: string; message?: string } } }
   return err.response?.data?.detail || err.response?.data?.message || err.message || fallback
 }
@@ -359,6 +400,9 @@ onMounted(async () => {
     aliyunCaptchaSceneId.value = settings.aliyun_captcha_scene_id || ''
     aliyunCaptchaPrefix.value = settings.aliyun_captcha_prefix || ''
     aliyunCaptchaRegion.value = settings.aliyun_captcha_region || 'cn'
+    registrationEmailSuffixWhitelist.value = normalizeRegistrationEmailSuffixWhitelist(
+      settings.registration_email_suffix_whitelist || []
+    )
   } catch {
     invitationCodeEnabled.value = false
     emailVerifyEnabled.value = true
@@ -371,6 +415,7 @@ onMounted(async () => {
     aliyunCaptchaSceneId.value = ''
     aliyunCaptchaPrefix.value = ''
     aliyunCaptchaRegion.value = 'cn'
+    registrationEmailSuffixWhitelist.value = []
   }
 })
 
