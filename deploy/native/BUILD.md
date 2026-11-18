@@ -1,5 +1,7 @@
 # Native build and upstream updates
 
+For an upstream update or a custom release on `aibj`, follow the [aibj native release procedure](RELEASE.md).
+
 Build on a workstation or CI runner with Node.js 24, pnpm 9, Go matching
 `backend/go.mod` (currently 1.27.4), Python 3, Git, and tar. No container runtime is
 required to build or run the application. Backend integration tests use the
