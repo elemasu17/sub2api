@@ -44,4 +44,12 @@ describe('redeem purchase link', () => {
     expect(wrapper.find('form').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('hides unsafe destinations', async () => {
+    settings.redeem_purchase_url = 'javascript:alert(document.domain)'
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.find('a[target="_blank"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })

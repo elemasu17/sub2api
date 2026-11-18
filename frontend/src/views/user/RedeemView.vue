@@ -382,6 +382,7 @@ import { redeemAPI, authAPI, type RedeemHistoryItem } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { formatDateTime } from '@/utils/format'
+import { sanitizeUrl } from '@/utils/url'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
@@ -534,7 +535,7 @@ onMounted(async () => {
   try {
     const settings = await authAPI.getPublicSettings()
     contactInfo.value = settings.contact_info || ''
-    purchaseURL.value = settings.redeem_purchase_url || ''
+    purchaseURL.value = sanitizeUrl(settings.redeem_purchase_url || '')
   } catch (error) {
     console.error('Failed to load contact info:', error)
   }
