@@ -2,6 +2,8 @@
 
 This directory contains files for deploying Sub2API on Linux servers and Apple-silicon Macs.
 
+For the `aibj` fork's source-built systemd deployment, follow the [aibj native release procedure](native/RELEASE.md).
+
 ## Deployment Methods
 
 | Method | Best For | Setup Wizard |

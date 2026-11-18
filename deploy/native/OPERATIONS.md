@@ -2,6 +2,8 @@
 
 本目录通过源码构建 Linux 二进制，由 systemd 运行，不发布容器镜像，不依赖对象存储。构建入口和上游同步见同目录构建文档。
 
+`aibj` 的生产发布、验收与历史版本清理统一按 [aibj 原生发布规范](RELEASE.md) 执行。
+
 ## 目录与权限
 
 - `/opt/sub2api/releases/<version>`：部署用户/root 持有，服务用户只读；程序与 resources 必须成套。

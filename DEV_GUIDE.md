@@ -2,6 +2,8 @@
 
 > 本文档记录项目环境配置、常见坑点和注意事项，供 Claude Code 和团队成员参考。
 
+`elemasu17/sub2api` 的 `aibj` 分支更新上游版本或发布本地定制时，请按 [aibj 原生发布规范](deploy/native/RELEASE.md) 操作。
+
 ## 一、项目基本信息
 
 | 项目 | 说明 |
