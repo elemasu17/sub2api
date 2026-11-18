@@ -63,6 +63,13 @@
               :placeholder="t('auth.emailPlaceholder')"
             />
           </div>
+          <p
+            v-if="emailRegistrationPolicyHint"
+            data-testid="registration-email-policy-hint"
+            class="input-hint mt-2"
+          >
+            {{ emailRegistrationPolicyHint }}
+          </p>
           <p v-if="errors.email" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
             {{ errors.email }}
           </p>
@@ -540,6 +547,25 @@ const validationToastMessage = computed(() =>
   errors.turnstile ||
   ''
 )
+
+const emailRegistrationPolicyHint = computed(() => {
+  if (!settingsLoaded.value || registrationEmailSuffixWhitelist.value.length === 0) {
+    return ''
+  }
+
+  const separator = String(locale.value || '').toLowerCase().startsWith('zh') ? '、' : ', '
+  const suffixes = formatRegistrationEmailSuffixWhitelistForMessage(
+    registrationEmailSuffixWhitelist.value,
+    {
+      separator,
+      more: (count) => t('auth.emailSuffixAllowedMore', { count })
+    }
+  )
+
+  return emailDomainQuotaEnabled.value
+    ? t('auth.emailSuffixWhitelistQuotaHint', { suffixes })
+    : t('auth.emailSuffixWhitelistHint', { suffixes })
+})
 
 const showOAuthLogin = computed(
   () =>

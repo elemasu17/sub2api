@@ -256,6 +256,9 @@ export default {
     emailSuffixNotAllowed: 'This email domain is not allowed for registration.',
     emailSuffixNotAllowedWithAllowed:
       'This email domain is not allowed. Allowed domains: {suffixes}',
+    emailSuffixWhitelistHint: 'Only these email domains can register: {suffixes}',
+    emailSuffixWhitelistQuotaHint:
+      'These domains can register directly. Other domains are limited to one account per registrable domain. Allowed domains: {suffixes}',
     emailSuffixAllowedMore: 'and {count} more',
     loginSuccess: 'Login successful! Welcome back.',
     accountCreatedSuccess: 'Account created successfully! Welcome to {siteName}.',

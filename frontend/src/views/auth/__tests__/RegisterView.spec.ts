@@ -136,6 +136,37 @@ describe('RegisterView', () => {
     expect(wrapper.find('#promo_code').exists()).toBe(true)
   })
 
+  it('shows the email domain policy below the email input after settings load', async () => {
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      turnstile_enabled: false,
+      registration_email_suffix_whitelist: ['allowed.com', '*.edu.cn']
+    })
+
+    const wrapper = mountRegister()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="registration-email-policy-hint"]').text()).toContain(
+      'auth.emailSuffixWhitelistHint'
+    )
+  })
+
+  it('explains the non-whitelist domain quota in the email policy hint', async () => {
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      turnstile_enabled: false,
+      registration_email_suffix_whitelist: ['allowed.com'],
+      registration_email_domain_quota_enabled: true
+    })
+
+    const wrapper = mountRegister()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="registration-email-policy-hint"]').text()).toContain(
+      'auth.emailSuffixWhitelistQuotaHint'
+    )
+  })
+
   it.each([
     ['', 'auth.confirmPasswordRequired'],
     ['different-password', 'auth.passwordsDoNotMatch']
