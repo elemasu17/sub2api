@@ -103,6 +103,20 @@
           </div>
         </div>
 
+        <!-- Redeem Code Purchase Link -->
+        <a
+          v-if="user && redeemPurchaseURL"
+          :href="redeemPurchaseURL"
+          target="_blank"
+          rel="noopener noreferrer"
+          :title="t('redeem.purchaseCode')"
+          :aria-label="t('redeem.purchaseCode')"
+          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+        >
+          <Icon name="gift" size="sm" />
+          <span class="hidden sm:inline">{{ t('redeem.purchaseCode') }}</span>
+        </a>
+
         <!-- User Dropdown -->
         <div v-if="user" class="relative" ref="dropdownRef">
           <button
@@ -155,6 +169,18 @@
               </div>
 
               <div class="py-1">
+                <a
+                  v-if="redeemPurchaseURL"
+                  :href="redeemPurchaseURL"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click="closeDropdown"
+                  class="dropdown-item"
+                >
+                  <Icon name="gift" size="sm" />
+                  {{ t('redeem.purchaseCode') }}
+                </a>
+
                 <router-link to="/profile" @click="closeDropdown" class="dropdown-item">
                   <Icon name="user" size="sm" />
                   {{ t('nav.profile') }}
@@ -279,6 +305,9 @@ const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => sanitizeUrl(appStore.docUrl))
+const redeemPurchaseURL = computed(() =>
+  sanitizeUrl(appStore.cachedPublicSettings?.redeem_purchase_url || ''),
+)
 const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')
 const availableBalance = computed(() => Number(user.value?.balance || 0))

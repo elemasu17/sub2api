@@ -18,6 +18,14 @@ describe('doc_url sanitization', () => {
     expect(headerSource).toContain('sanitizeUrl(appStore.docUrl)')
   })
 
+  it('AppHeader sanitizes the redeem purchase URL before rendering it', () => {
+    expect(headerSource).toContain(
+      "sanitizeUrl(appStore.cachedPublicSettings?.redeem_purchase_url || '')",
+    )
+    expect(headerSource).toContain('target="_blank"')
+    expect(headerSource).toContain('rel="noopener noreferrer"')
+  })
+
   it('HomeView imports sanitizeUrl', () => {
     expect(homeViewSource).toContain("import { sanitizeUrl } from '@/utils/url'")
   })
