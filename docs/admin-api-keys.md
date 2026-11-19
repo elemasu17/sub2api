@@ -31,8 +31,8 @@
 | 权限 | 用途 |
 | --- | --- |
 | `accounts.identity.read` | 账户邮箱、套餐、订阅到期及创建时间；列表/详情仍需 `accounts.read` |
-| `accounts.usage.read` | 单个及批量账户额度查询、主动刷新，以及列表/详情中的周额度快照 |
-| `accounts.stats.read` | 单个/批量今日统计与历史统计，包含请求数、Token 和费用 |
+| `accounts.usage.read` | 单个及批量账户额度查询、主动刷新，以及列表/详情中的周额度快照；可读取累计账户费用 |
+| `accounts.stats.read` | 单个/批量今日统计与历史统计，包含请求数、Token 和费用；可读取累计账户费用 |
 | `accounts.options.write` | 创建 OpenAI OAuth 账户时写入已列明的身份和连接选项 |
 | `accounts.rate.write` | 创建/修改账户计费倍率 |
 | `groups.list.read` | 所选分组的 ID、名称、平台与状态，不含费率或模型配置 |
