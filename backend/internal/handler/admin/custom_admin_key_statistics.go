@@ -55,6 +55,10 @@ func (h *AccountHandler) scopedAdminStatistics(c *gin.Context) bool {
 	switch {
 	case c.Request.Method == "GET" && (path == "/:id/today-stats" || path == "/:id/stats"):
 		action = "accounts.stats.read"
+	case c.Request.Method == "GET" && path == "/:id/lifetime-usage":
+		// Lifetime usage is a read-only billing statistic. Both existing
+		// statistics and usage scopes are allowed to access it.
+		action = "accounts.stats.read"
 	case c.Request.Method == "GET" && path == "/:id/usage":
 		action = "accounts.usage.read"
 	case c.Request.Method == "POST" && path == "/today-stats/batch":
@@ -122,6 +126,16 @@ func (h *AccountHandler) scopedAdminStatistics(c *gin.Context) bool {
 		return true
 	}
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if path == "/:id/lifetime-usage" {
+		if p := adminaccess.RestrictedFromContext(c.Request.Context()); p != nil {
+			if a, err := h.adminService.GetAccount(c.Request.Context(), id); err == nil && a != nil {
+				resource := scopedAccountResource(a)
+				if !p.Policy.AllowsAccount(action, resource) && p.Policy.AllowsAccount("accounts.usage.read", resource) {
+					action = "accounts.usage.read"
+				}
+			}
+		}
+	}
 	a, ok := scopedAuthorizedAccount(c, h.adminService, id, action, action == "accounts.usage.read")
 	if !ok {
 		return true
@@ -131,6 +145,13 @@ func (h *AccountHandler) scopedAdminStatistics(c *gin.Context) bool {
 		return true
 	}
 	switch path {
+	case "/:id/lifetime-usage":
+		usage, err := h.accountUsageService.GetAccountLifetimeUsage(c.Request.Context(), id, action)
+		if err != nil {
+			response.Error(c, 502, "账户累计费用查询失败")
+		} else {
+			response.Success(c, usage)
+		}
 	case "/:id/today-stats":
 		stats, err := h.accountUsageService.GetTodayStats(c.Request.Context(), id)
 		if err != nil {

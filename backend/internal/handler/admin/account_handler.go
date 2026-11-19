@@ -2690,6 +2690,35 @@ func (h *AccountHandler) GetTodayStats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
+// GetLifetimeUsage handles the durable account-billed total.
+// GET /api/v1/admin/accounts/:id/lifetime-usage
+func (h *AccountHandler) GetLifetimeUsage(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.accountUsageService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "账户额度服务不可用")
+		return
+	}
+	action := "accounts.stats.read"
+	if p := adminaccess.RestrictedFromContext(c.Request.Context()); p != nil && h.adminService != nil {
+		if account, getErr := h.adminService.GetAccount(c.Request.Context(), accountID); getErr == nil && account != nil {
+			resource := scopedAccountResource(account)
+			if !p.Policy.AllowsAccount(action, resource) && p.Policy.AllowsAccount("accounts.usage.read", resource) {
+				action = "accounts.usage.read"
+			}
+		}
+	}
+	usage, err := h.accountUsageService.GetAccountLifetimeUsage(c.Request.Context(), accountID, action)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, usage)
+}
+
 // BatchTodayStatsRequest 批量今日统计请求体。
 type BatchTodayStatsRequest struct {
 	AccountIDs []int64 `json:"account_ids" binding:"required"`

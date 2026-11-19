@@ -4,8 +4,8 @@ import "testing"
 
 func TestStatisticsAndOpenAIPermissions(t *testing.T) {
 	for action, routes := range map[string][]string{
-		"accounts.stats.read":     {"GET /accounts/:id/today-stats", "POST /accounts/today-stats/batch", "GET /accounts/:id/stats"},
-		"accounts.usage.read":     {"POST /accounts/usage/batch"},
+		"accounts.stats.read":     {"GET /accounts/:id/today-stats", "POST /accounts/today-stats/batch", "GET /accounts/:id/stats", "GET /accounts/:id/lifetime-usage"},
+		"accounts.usage.read":     {"POST /accounts/usage/batch", "GET /accounts/:id/lifetime-usage"},
 		"openai.quota.read":       {"GET /openai/accounts/:id/quota", "POST /openai/accounts/:id/quota/refresh"},
 		"openai.quota.reset":      {"POST /openai/accounts/:id/reset-quota"},
 		"openai.referrals.read":   {"POST /openai/accounts/:id/referrals/refresh"},
