@@ -83,6 +83,11 @@ func (s *scopedRouteStatisticsLogs) GetAccountUsageStats(context.Context, int64,
 	s.reads.Add(1)
 	return &usagestats.AccountUsageStatsResponse{}, nil
 }
+func (s *scopedRouteStatisticsLogs) GetAccountLifetimeUsage(context.Context, int64) (*service.AccountLifetimeUsage, error) {
+	s.reads.Add(1)
+	now := time.Now()
+	return &service.AccountLifetimeUsage{TotalAccountCost: 12, UpdatedAt: &now}, nil
+}
 
 type scopedRouteCapacityGroups struct{ service.GroupRepository }
 
@@ -111,8 +116,10 @@ func TestScopedAdminRegisteredStatisticsAndOpenAIRoutes(t *testing.T) {
 	}{
 		{"accounts.stats.read", "GET", "/accounts/1/today-stats", "", 200},
 		{"accounts.stats.read", "GET", "/accounts/1/stats", "", 200},
+		{"accounts.stats.read", "GET", "/accounts/1/lifetime-usage", "", 200},
 		{"accounts.stats.read", "POST", "/accounts/today-stats/batch", `{"account_ids":[1,1]}`, 200},
 		{"accounts.usage.read", "GET", "/accounts/1/usage", "", 200},
+		{"accounts.usage.read", "GET", "/accounts/1/lifetime-usage", "", 200},
 		{"accounts.usage.read", "POST", "/accounts/usage/batch", `{"account_ids":[1,1]}`, 200},
 		{"openai.quota.read", "GET", "/openai/accounts/1/quota", "", 200},
 		{"openai.quota.read", "POST", "/openai/accounts/1/quota/refresh", "", 200},

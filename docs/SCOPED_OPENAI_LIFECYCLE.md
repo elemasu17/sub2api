@@ -210,3 +210,35 @@ Before updating upstream, run the scoped OAuth/session and account-test
 regressions, plus the external manager's HTTP contract tests. The first rollout
 must leave external feature flags disabled until these capabilities are deployed
 and verified using an isolated test account.
+
+## Durable account cost for an external scheduler
+
+The C2/GW scheduler reads the account-billed dollar total from
+`GET /api/v1/admin/accounts/:id/lifetime-usage`. This endpoint is read-only and
+accepts either `accounts.stats.read` or `accounts.usage.read` for the same
+scoped account. It returns `total_account_cost` and `updated_at` in the normal
+response envelope. The value is calculated from the account-billed cost and
+the rate multiplier captured on each usage log.
+
+Apply `migrations/250_account_lifetime_usage.sql` before enabling the GW quota
+cron. The migration backfills existing usage logs and installs an
+`AFTER INSERT` trigger, so later usage-log retention does not reduce the total.
+Sub2API applies this file through its normal PostgreSQL startup migration runner,
+which records the checksum in `schema_migrations`. Do not execute the SQL manually
+against a running deployment or insert a ledger row by hand. When PostgreSQL is
+unavailable, the migration is pending and the GW quota scheduler must remain
+disabled until a service restart completes the runner and the table, trigger, and
+ledger row are verified.
+The GW records a post-import baseline and accumulates only positive increases;
+an observed total decrease (for example after a legacy reset) is never treated
+as negative usage. During a staged rollout, a GW that receives 404 from this
+route falls back to the existing rolling statistics endpoint, but that fallback
+does not provide the same retention guarantee and should be removed after all
+Sub2API replicas have applied migration 250.
+
+The C2/GW policy treats a post-import cumulative amount above `$90` as a
+permanent automatic-stop condition. This is an observation-based soft stop:
+the scheduler stops accepting new work after the next cron pass while
+in-flight requests may finish and be billed. This revision has no reset endpoint;
+restarting Sub2API or deleting old usage logs must not reset it. Any future
+reset requires an explicit, reviewed operator action with an audit record.

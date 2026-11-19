@@ -21,8 +21,8 @@ type permissionDefinition struct {
 // 全站权限与账户规则独立，选中分组绝不会隐式授予全站操作。
 var definitions = []permissionDefinition{
 	{Permission{"accounts.identity.read", "读取账户邮箱、套餐及创建时间（不含令牌）", "账户", "account"}, []string{"GET /accounts/:id"}},
-	{Permission{"accounts.usage.read", "读取及主动刷新授权账户额度与快照", "账户", "account"}, []string{"GET /accounts/:id/usage", "POST /accounts/usage/batch"}},
-	{Permission{"accounts.stats.read", "读取账户用量与费用统计", "账户", "account"}, []string{"GET /accounts/:id/today-stats", "POST /accounts/today-stats/batch", "GET /accounts/:id/stats"}},
+	{Permission{"accounts.usage.read", "读取及主动刷新授权账户额度与快照", "账户", "account"}, []string{"GET /accounts/:id/usage", "POST /accounts/usage/batch", "GET /accounts/:id/lifetime-usage"}},
+	{Permission{"accounts.stats.read", "读取账户用量与费用统计", "账户", "account"}, []string{"GET /accounts/:id/today-stats", "POST /accounts/today-stats/batch", "GET /accounts/:id/stats", "GET /accounts/:id/lifetime-usage"}},
 	{Permission{"openai.quota.read", "查询 OpenAI 上游额度与重置次数", "OpenAI", "account"}, []string{"GET /openai/accounts/:id/quota", "POST /openai/accounts/:id/quota/refresh"}},
 	{Permission{"openai.quota.reset", "消耗 OpenAI 重置次数恢复额度", "OpenAI", "account"}, []string{"POST /openai/accounts/:id/reset-quota"}},
 	{Permission{"openai.referrals.read", "查询 OpenAI 邀请资格与次数", "OpenAI", "account"}, []string{"POST /openai/accounts/:id/referrals/refresh"}},
