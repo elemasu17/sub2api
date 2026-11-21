@@ -137,7 +137,7 @@ func testCodexImportPostgresInitialRowAndReplay(t *testing.T, unscheduled bool) 
 	require.NoError(t, err)
 	t.Logf("validated final policy SHA256: %x", sha256.Sum256(policyJSON))
 	cfg := pausedImportConfig()
-	admin := service.NewAdminService(cfg, nil, groups, accounts, nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	admin := service.NewAdminService(cfg, nil, groups, accounts, nil, nil, nil, nil, nil, nil, nil, nil, nil, client, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	oauth := &pausedImportOAuthFixture{}
 	model := &pausedImportModelFixture{}
 	h := &AccountHandler{cfg: cfg, adminService: admin,
