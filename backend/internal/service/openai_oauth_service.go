@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -188,40 +189,9 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		return nil, err
 	}
 
-	// Parse ID token to get user info
-	var userInfo *openai.UserInfo
-	if tokenResp.IDToken != "" {
-		claims, parseErr := openai.ParseIDToken(tokenResp.IDToken)
-		if parseErr != nil {
-			slog.Warn("openai_oauth_id_token_parse_failed", "error", parseErr)
-		} else {
-			userInfo = claims.GetUserInfo()
-		}
-	}
-
 	// Delete session after successful exchange
 	s.sessionStore.Delete(input.SessionID)
-
-	tokenInfo := &OpenAITokenInfo{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		IDToken:      tokenResp.IDToken,
-		ExpiresIn:    int64(tokenResp.ExpiresIn),
-		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
-		ClientID:     clientID,
-	}
-
-	if userInfo != nil {
-		tokenInfo.Email = userInfo.Email
-		tokenInfo.ChatGPTAccountID = userInfo.ChatGPTAccountID
-		tokenInfo.ChatGPTUserID = userInfo.ChatGPTUserID
-		tokenInfo.OrganizationID = userInfo.OrganizationID
-		tokenInfo.PlanType = userInfo.PlanType
-	}
-
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
-
-	return tokenInfo, nil
+	return s.enrichOAuthResponse(ctx, tokenResp, proxyURL, clientID, nil)
 }
 
 // RefreshToken refreshes an OpenAI OAuth token
@@ -231,70 +201,118 @@ func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken stri
 
 // RefreshTokenWithClientID refreshes an OpenAI OAuth token with optional client_id.
 func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*OpenAITokenInfo, error) {
+	return s.refreshTokenForAccount(ctx, refreshToken, proxyURL, clientID, nil)
+}
+
+func (s *OpenAIOAuthService) refreshTokenForAccount(ctx context.Context, refreshToken, proxyURL, clientID string, account *Account) (*OpenAITokenInfo, error) {
 	tokenResp, err := s.oauthClient.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 	if err != nil {
 		return nil, err
 	}
+	return s.enrichOAuthResponse(ctx, tokenResp, proxyURL, clientID, account)
+}
 
-	// Parse ID token to get user info
-	var userInfo *openai.UserInfo
-	if tokenResp.IDToken != "" {
-		claims, parseErr := openai.ParseIDToken(tokenResp.IDToken)
-		if parseErr != nil {
-			slog.Warn("openai_oauth_id_token_parse_failed", "error", parseErr)
-		} else {
-			userInfo = claims.GetUserInfo()
-		}
-	}
-
+func (s *OpenAIOAuthService) enrichOAuthResponse(ctx context.Context, tokenResp *openai.TokenResponse, proxyURL, clientID string, account *Account) (*OpenAITokenInfo, error) {
 	tokenInfo := &OpenAITokenInfo{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		IDToken:      tokenResp.IDToken,
 		ExpiresIn:    int64(tokenResp.ExpiresIn),
 		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
+		ClientID:     strings.TrimSpace(clientID),
 	}
-	if trimmed := strings.TrimSpace(clientID); trimmed != "" {
-		tokenInfo.ClientID = trimmed
+	if tokenResp.IDToken != "" {
+		claims, err := openai.ParseIDToken(tokenResp.IDToken)
+		if err != nil {
+			slog.Warn("openai_oauth_id_token_parse_failed")
+		} else {
+			user := claims.GetUserInfo()
+			tokenInfo.Email = user.Email
+			tokenInfo.ChatGPTAccountID = user.ChatGPTAccountID
+			tokenInfo.ChatGPTUserID = user.ChatGPTUserID
+			tokenInfo.OrganizationID = user.OrganizationID
+			tokenInfo.PlanType = user.PlanType
+			if account == nil || validChatGPTSubscriptionExpiry(account.GetCredential("subscription_expires_at")) == "" {
+				tokenInfo.SubscriptionExpiresAt = personalSubscriptionSnapshot(claims.OpenAIAuth)
+			}
+		}
 	}
-
-	if userInfo != nil {
-		tokenInfo.Email = userInfo.Email
-		tokenInfo.ChatGPTAccountID = userInfo.ChatGPTAccountID
-		tokenInfo.ChatGPTUserID = userInfo.ChatGPTUserID
-		tokenInfo.OrganizationID = userInfo.OrganizationID
-		tokenInfo.PlanType = userInfo.PlanType
+	if err := s.enrichTokenInfo(ctx, tokenInfo, proxyURL, account); err != nil {
+		return nil, err
 	}
-
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
-
 	return tokenInfo, nil
+}
+
+// A fresh ID token can still contain a login-time snapshot. Use this only
+// when we have no stored expiry and the plan and account are in the same token.
+func personalSubscriptionSnapshot(auth *openai.OpenAIAuthClaims) string {
+	if auth == nil || strings.TrimSpace(auth.ChatGPTAccountID) == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.ChatGPTPlanType)) {
+	case "go", "plus", "pro":
+		var expiry string
+		if json.Unmarshal(auth.ChatGPTSubscriptionActiveUntil, &expiry) == nil {
+			expiry = strings.TrimSpace(expiry)
+			if end, err := time.Parse(time.RFC3339, expiry); err == nil && end.After(time.Now()) {
+				return expiry
+			}
+		}
+	}
+	return ""
 }
 
 // enrichTokenInfo 通过 ChatGPT backend-api 补全 tokenInfo 并设置隐私（best-effort）。
 // 从 accounts/check 获取最新 plan_type、subscription_expires_at、email，
 // 然后尝试关闭训练数据共享。适用于所有获取/刷新 token 的路径。
-func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *OpenAITokenInfo, proxyURL string) {
-	if tokenInfo.AccessToken == "" || s.privacyClientFactory == nil {
-		return
-	}
-
-	// 从 access_token JWT 中提取 orgID（poid），用于匹配正确的账号
+func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *OpenAITokenInfo, proxyURL string, account *Account) error {
 	orgID := tokenInfo.OrganizationID
-	if orgID == "" {
-		if atClaims, err := openai.DecodeIDToken(tokenInfo.AccessToken); err == nil && atClaims.OpenAIAuth != nil {
-			orgID = atClaims.OpenAIAuth.POID
+	planFromCache := account != nil && account.GetOpenAIRefreshToken() == ""
+	var savedID, bearerID, bearerPlan string
+	if account != nil {
+		savedID = strings.TrimSpace(account.GetCredential("chatgpt_account_id"))
+	}
+	if claims, err := openai.DecodeIDToken(tokenInfo.AccessToken); err == nil && claims.OpenAIAuth != nil {
+		auth := claims.OpenAIAuth
+		if orgID == "" {
+			orgID = auth.POID
+		}
+		bearerID, bearerPlan = strings.TrimSpace(auth.ChatGPTAccountID), auth.ChatGPTPlanType
+	}
+	tokenID := strings.TrimSpace(tokenInfo.ChatGPTAccountID)
+	if differentChatGPTAccounts(tokenID, bearerID) || differentChatGPTAccounts(savedID, tokenID) || differentChatGPTAccounts(savedID, bearerID) {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_ACCOUNT_MISMATCH", "access_denied: OpenAI OAuth account identity mismatch, reauthorization required")
+	}
+	if tokenID == "" {
+		tokenInfo.ChatGPTAccountID = bearerID
+		if bearerID == "" {
+			tokenInfo.ChatGPTAccountID = savedID
 		}
 	}
-	// accounts/check 命中的记录不属于个人账号时，必须改用个人订阅端点拿到期时间，
-	// 否则会把 workspace 权益的 expires_at 当成个人订阅到期日展示。
-	forcePersonalSubscriptionLookup := false
-	if info := fetchChatGPTAccountInfo(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL, orgID); info != nil {
+	if tokenInfo.PlanType == "" && bearerID != "" {
+		tokenInfo.PlanType = bearerPlan
+	}
+	if tokenInfo.PlanType == "" && savedID != "" {
+		tokenInfo.PlanType = account.GetCredential("plan_type")
+		planFromCache = true
+	}
+	if tokenInfo.AccessToken == "" || s.privacyClientFactory == nil {
+		return nil
+	}
+	subscriptionAccountID := strings.TrimSpace(tokenInfo.ChatGPTAccountID)
+	preferredAccountID := ""
+	if strings.TrimSpace(tokenInfo.PlanType) != "" {
+		preferredAccountID = subscriptionAccountID
+	}
+	liveExpiry := ""
+	if info := fetchChatGPTAccountInfo(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL, orgID, preferredAccountID); info != nil {
 		// chatgpt_plan_type from the ID token is the canonical personal-plan value.
 		// accounts/check is a multi-account/workspace endpoint; inactive team or
 		// business workspaces can otherwise overwrite Pro/Free with internal
 		// workspace billing plan names such as self_serve_business_usage_based.
-		appliedAccountInfoPlanType := shouldApplyChatGPTAccountInfoPlanType(tokenInfo.PlanType, info.PlanType)
+		belongs := chatGPTAccountInfoBelongsToTokenAccount(tokenInfo, info)
+		appliedAccountInfoPlanType := shouldApplyChatGPTAccountInfoPlanType(tokenInfo.PlanType, info.PlanType) ||
+			(planFromCache && belongs && strings.TrimSpace(info.PlanType) != "")
 		if appliedAccountInfoPlanType {
 			tokenInfo.PlanType = info.PlanType
 		}
@@ -303,25 +321,31 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 		// 只有该记录确实就是个人账号才能用它的 entitlement.expires_at——poid 指向的
 		// 默认 Personal workspace 与 chatgpt_account_id 可以是两个不同的标识，
 		// 混用会显示成「个人 Pro + workspace 到期时间」。
-		if info.SubscriptionExpiresAt != "" {
-			if appliedAccountInfoPlanType || chatGPTAccountInfoBelongsToTokenAccount(tokenInfo, info) {
-				tokenInfo.SubscriptionExpiresAt = info.SubscriptionExpiresAt
-			} else {
-				forcePersonalSubscriptionLookup = true
-			}
+		if appliedAccountInfoPlanType || belongs {
+			liveExpiry = info.SubscriptionExpiresAt
+		}
+		if appliedAccountInfoPlanType && !belongs {
+			// A personal billing lookup cannot supply the selected workspace plan's date.
+			subscriptionAccountID = ""
 		}
 		if tokenInfo.Email == "" && info.Email != "" {
 			tokenInfo.Email = info.Email
 		}
 	}
-	if forcePersonalSubscriptionLookup || strings.TrimSpace(tokenInfo.SubscriptionExpiresAt) == "" {
-		if expiresAt := fetchChatGPTSubscriptionExpiresAt(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL, resolveChatGPTSubscriptionAccountID(tokenInfo, orgID)); expiresAt != "" {
-			tokenInfo.SubscriptionExpiresAt = expiresAt
-		}
+	if liveExpiry == "" && subscriptionAccountID != "" {
+		liveExpiry = fetchChatGPTSubscriptionExpiresAt(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL, subscriptionAccountID)
+	}
+	if liveExpiry != "" {
+		tokenInfo.SubscriptionExpiresAt = liveExpiry
 	}
 
 	// 尝试设置隐私（关闭训练数据共享），best-effort
 	tokenInfo.PrivacyMode = disableOpenAITraining(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL)
+	return nil
+}
+
+func differentChatGPTAccounts(a, b string) bool {
+	return a != "" && b != "" && !strings.EqualFold(a, b)
 }
 
 func shouldApplyChatGPTAccountInfoPlanType(current, candidate string) bool {
@@ -329,27 +353,11 @@ func shouldApplyChatGPTAccountInfoPlanType(current, candidate string) bool {
 }
 
 // chatGPTAccountInfoBelongsToTokenAccount 判断 accounts/check 命中的那条记录是不是
-// token 自己的个人 ChatGPT 账号。两侧任一缺 ID 时无法区分，返回 true 保持既有行为。
+// token 自己的个人 ChatGPT 账号。两侧都必须有可比较的账号标识。
 func chatGPTAccountInfoBelongsToTokenAccount(tokenInfo *OpenAITokenInfo, info *ChatGPTAccountInfo) bool {
 	personalID := strings.TrimSpace(tokenInfo.ChatGPTAccountID)
 	sourceID := strings.TrimSpace(info.AccountID)
-	if personalID == "" || sourceID == "" {
-		return true
-	}
-	return strings.EqualFold(personalID, sourceID)
-}
-
-func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID string) string {
-	for _, candidate := range []string{
-		tokenInfo.ChatGPTAccountID,
-		tokenInfo.OrganizationID,
-		orgID,
-	} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
+	return personalID != "" && strings.EqualFold(personalID, sourceID)
 }
 
 // RefreshAccountToken refreshes token for an OpenAI OAuth account
@@ -381,29 +389,33 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	if refreshToken == "" {
 		if accessToken != "" {
 			tokenInfo := &OpenAITokenInfo{
-				AccessToken:           accessToken,
-				RefreshToken:          "",
-				IDToken:               account.GetCredential("id_token"),
-				ClientID:              account.GetCredential("client_id"),
-				Email:                 account.GetCredential("email"),
-				ChatGPTAccountID:      account.GetCredential("chatgpt_account_id"),
-				ChatGPTUserID:         account.GetCredential("chatgpt_user_id"),
-				OrganizationID:        account.GetCredential("organization_id"),
-				PlanType:              account.GetCredential("plan_type"),
-				SubscriptionExpiresAt: account.GetCredential("subscription_expires_at"),
+				AccessToken:      accessToken,
+				RefreshToken:     "",
+				IDToken:          account.GetCredential("id_token"),
+				ClientID:         account.GetCredential("client_id"),
+				Email:            account.GetCredential("email"),
+				ChatGPTAccountID: account.GetCredential("chatgpt_account_id"),
+				ChatGPTUserID:    account.GetCredential("chatgpt_user_id"),
+				OrganizationID:   account.GetCredential("organization_id"),
+				PlanType:         account.GetCredential("plan_type"),
 			}
 			if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
 				tokenInfo.ExpiresAt = expiresAt.Unix()
 				tokenInfo.ExpiresIn = int64(time.Until(*expiresAt).Seconds())
 			}
-			s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+			if err := s.enrichTokenInfo(ctx, tokenInfo, proxyURL, account); err != nil {
+				return nil, err
+			}
+			if tokenInfo.SubscriptionExpiresAt == "" {
+				tokenInfo.SubscriptionExpiresAt = validChatGPTSubscriptionExpiry(account.GetCredential("subscription_expires_at"))
+			}
 			return tokenInfo, nil
 		}
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
 	}
 
 	clientID := account.GetCredential("client_id")
-	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
+	return s.refreshTokenForAccount(ctx, refreshToken, proxyURL, clientID, account)
 }
 
 // BuildAccountCredentials builds credentials map from token info
@@ -437,8 +449,8 @@ func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo)
 	if tokenInfo.PlanType != "" {
 		creds["plan_type"] = tokenInfo.PlanType
 	}
-	if tokenInfo.SubscriptionExpiresAt != "" {
-		creds["subscription_expires_at"] = tokenInfo.SubscriptionExpiresAt
+	if expiry := validChatGPTSubscriptionExpiry(tokenInfo.SubscriptionExpiresAt); expiry != "" {
+		creds["subscription_expires_at"] = expiry
 	}
 	if strings.TrimSpace(tokenInfo.ClientID) != "" {
 		creds["client_id"] = strings.TrimSpace(tokenInfo.ClientID)

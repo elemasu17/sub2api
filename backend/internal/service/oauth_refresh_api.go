@@ -458,6 +458,10 @@ func persistOpenAIRefreshCredentials(parent context.Context, repo AccountReposit
 		replacement = shallowCopyMap(current.Credentials)
 		for key, value := range credentials {
 			previous, exists := attempted.Credentials[key]
+			if key == "subscription_expires_at" && validChatGPTSubscriptionExpiry(current.GetCredential(key)) != "" && !reflect.DeepEqual(previous, current.Credentials[key]) {
+				// A concurrent lookup has already supplied a date newer than our snapshot.
+				continue
+			}
 			if !exists || !reflect.DeepEqual(previous, value) {
 				replacement[key] = value
 			}

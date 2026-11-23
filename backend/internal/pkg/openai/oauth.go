@@ -269,12 +269,13 @@ type IDTokenClaims struct {
 
 // OpenAIAuthClaims represents the OpenAI specific auth claims
 type OpenAIAuthClaims struct {
-	ChatGPTAccountID string              `json:"chatgpt_account_id"`
-	ChatGPTUserID    string              `json:"chatgpt_user_id"`
-	ChatGPTPlanType  string              `json:"chatgpt_plan_type"`
-	UserID           string              `json:"user_id"`
-	POID             string              `json:"poid"` // organization ID in access_token JWT
-	Organizations    []OrganizationClaim `json:"organizations"`
+	ChatGPTSubscriptionActiveUntil json.RawMessage     `json:"chatgpt_subscription_active_until"`
+	ChatGPTAccountID               string              `json:"chatgpt_account_id"`
+	ChatGPTUserID                  string              `json:"chatgpt_user_id"`
+	ChatGPTPlanType                string              `json:"chatgpt_plan_type"`
+	UserID                         string              `json:"user_id"`
+	POID                           string              `json:"poid"` // organization ID in access_token JWT
+	Organizations                  []OrganizationClaim `json:"organizations"`
 }
 
 // OrganizationClaim represents an organization in the ID Token

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +16,120 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type subscriptionOAuthClient struct {
+	openaiOAuthClientRefreshStub
+	response openai.TokenResponse
+}
+
+func (c *subscriptionOAuthClient) ExchangeCode(context.Context, string, string, string, string, string) (*openai.TokenResponse, error) {
+	return &c.response, nil
+}
+
+func (c *subscriptionOAuthClient) RefreshTokenWithClientID(context.Context, string, string, string) (*openai.TokenResponse, error) {
+	return &c.response, nil
+}
+
+func subscriptionJWT(t *testing.T, auth map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{"https://api.openai.com/auth": auth})
+	require.NoError(t, err)
+	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".fixture"
+}
+
+func TestOpenAISubscriptionExpiryEnrichmentPaths(t *testing.T) {
+	const live = "2027-12-01T00:00:00Z"
+	for _, path := range []string{"exchange", "refresh", "access_only"} {
+		t.Run(path, func(t *testing.T) {
+			// No id_token. poid is not a ChatGPT billing account ID.
+			at := subscriptionJWT(t, map[string]any{"chatgpt_account_id": "billing", "poid": "org", "chatgpt_plan_type": "plus"})
+			client := &subscriptionOAuthClient{response: openai.TokenResponse{AccessToken: at}}
+			svc := NewOpenAIOAuthService(nil, client)
+			t.Cleanup(svc.Stop)
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{
+				onSubscription: func(accountID string) map[string]any {
+					require.Equal(t, "billing", accountID)
+					return map[string]any{"active_until": live}
+				},
+			})
+			t.Cleanup(server.Close)
+			svc.SetPrivacyClientFactory(newTestPrivacyClientFactory(server))
+			var info *OpenAITokenInfo
+			var err error
+			switch path {
+			case "exchange":
+				svc.sessionStore.Set("sid", &openai.OAuthSession{State: "state", CreatedAt: time.Now()})
+				info, err = svc.ExchangeCode(context.Background(), &OpenAIExchangeCodeInput{SessionID: "sid", Code: "code", State: "state"})
+			case "refresh":
+				info, err = svc.RefreshTokenWithClientID(context.Background(), "rt", "", "")
+			case "access_only":
+				info, err = svc.RefreshAccountToken(context.Background(), &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": at}})
+			}
+			require.NoError(t, err)
+			require.Equal(t, live, svc.BuildAccountCredentials(info)["subscription_expires_at"])
+		})
+	}
+}
+
 type openaiOAuthClientRefreshStub struct {
 	refreshCalls int32
+}
+
+func TestOpenAISubscriptionExpiryStoredPlan(t *testing.T) {
+	for _, tc := range []struct{ id, wantPlan string }{{"mine", "pro"}, {"workspace", "plus"}} {
+		t.Run(tc.id, func(t *testing.T) {
+			expiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{
+				accountsCheck: map[string]any{"accounts": map[string]any{tc.id: map[string]any{
+					"account":     map[string]any{"account_id": tc.id, "plan_type": "pro"},
+					"entitlement": map[string]any{"expires_at": expiry},
+				}}},
+			})
+			t.Cleanup(server.Close)
+			client := &subscriptionOAuthClient{response: openai.TokenResponse{AccessToken: "fresh-access"}}
+			svc := NewOpenAIOAuthService(nil, client)
+			t.Cleanup(svc.Stop)
+			svc.SetPrivacyClientFactory(newTestPrivacyClientFactory(server))
+			for _, rt := range []string{"", "rt"} {
+				account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+					"chatgpt_account_id": "mine", "plan_type": "plus", "access_token": "existing-access", "refresh_token": rt,
+				}}
+				info, err := svc.RefreshAccountToken(context.Background(), account)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantPlan, info.PlanType)
+				if tc.id == "mine" {
+					require.Equal(t, expiry, info.SubscriptionExpiresAt)
+				} else {
+					require.Empty(t, info.SubscriptionExpiresAt)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAISubscriptionExpiryConflictingBearer(t *testing.T) {
+	at := subscriptionJWT(t, map[string]any{"chatgpt_account_id": "other"})
+	snapshot := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	id := subscriptionJWT(t, map[string]any{"chatgpt_account_id": "mine", "chatgpt_plan_type": "pro", "chatgpt_subscription_active_until": snapshot})
+	client := &subscriptionOAuthClient{response: openai.TokenResponse{AccessToken: at, IDToken: id}}
+	svc := NewOpenAIOAuthService(nil, client)
+	t.Cleanup(svc.Stop)
+	svc.SetPrivacyClientFactory(func(string) (*req.Client, error) {
+		t.Error("conflicting identities must skip account lookups")
+		return nil, errors.New("blocked")
+	})
+	info, err := svc.RefreshToken(context.Background(), "rt", "")
+	require.ErrorContains(t, err, "reauthorization required")
+	require.True(t, isNonRetryableRefreshError(err))
+	require.Nil(t, info)
+	for _, old := range []string{"", "2025-01-02T00:00:00Z"} {
+		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+			"chatgpt_account_id": "mine", "access_token": at, "plan_type": "plus", "subscription_expires_at": old,
+		}}
+		info, err := svc.RefreshAccountToken(context.Background(), account)
+		require.ErrorContains(t, err, "reauthorization required")
+		require.Nil(t, info)
+		require.Equal(t, old, account.GetCredential("subscription_expires_at"))
+	}
 }
 
 func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
