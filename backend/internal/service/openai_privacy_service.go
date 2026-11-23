@@ -47,7 +47,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	client, err := clientFactory(proxyURL)
 	if err != nil {
-		slog.Warn("openai_privacy_client_error", "error", err.Error())
+		slog.Warn("openai_privacy_client_error")
 		return PrivacyModeFailed
 	}
 
@@ -65,7 +65,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 		Patch(openAISettingsURL)
 
 	if err != nil {
-		slog.Warn("openai_privacy_request_error", "error", err.Error())
+		slog.Warn("openai_privacy_request_error")
 		return PrivacyModeFailed
 	}
 
@@ -78,7 +78,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	}
 
 	if !resp.IsSuccessState() {
-		slog.Warn("openai_privacy_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
+		slog.Warn("openai_privacy_failed", "status", resp.StatusCode)
 		return PrivacyModeFailed
 	}
 
@@ -106,7 +106,7 @@ type ChatGPTAccountInfo struct {
 	SubscriptionExpiresAt string // entitlement.expires_at (RFC3339)
 }
 
-var (
+const (
 	chatGPTAccountsCheckURL = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
 	chatGPTSubscriptionsURL = "https://chatgpt.com/backend-api/subscriptions"
 )
@@ -115,7 +115,7 @@ var (
 // Used as fallback when id_token doesn't contain these fields (e.g., Mobile RT).
 // orgID is used to match the correct account when multiple accounts exist (e.g., personal + team).
 // Returns nil on any failure (best-effort, non-blocking).
-func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, orgID string) *ChatGPTAccountInfo {
+func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, orgID, preferredAccountID string) *ChatGPTAccountInfo {
 	if accessToken == "" || clientFactory == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 
 	client, err := clientFactory(proxyURL)
 	if err != nil {
-		slog.Debug("chatgpt_account_check_client_error", "error", err.Error())
+		slog.Debug("chatgpt_account_check_client_error")
 		return nil
 	}
 
@@ -140,91 +140,77 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 		Get(chatGPTAccountsCheckURL)
 
 	if err != nil {
-		slog.Warn("chatgpt_account_check_request_error", "error", err.Error())
+		slog.Warn("chatgpt_account_check_request_error")
 		return nil
 	}
 
 	if !resp.IsSuccessState() {
-		slog.Warn("chatgpt_account_check_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_account_check_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()))
 		return nil
 	}
-
-	info := &ChatGPTAccountInfo{}
 
 	accounts, ok := result["accounts"].(map[string]any)
 	if !ok {
-		slog.Debug("chatgpt_account_check_no_accounts", "body", truncate(resp.String(), 300))
+		slog.Debug("chatgpt_account_check_no_accounts")
 		return nil
 	}
 
-	// 优先匹配 orgID 对应的账号（access_token JWT 中的 poid）
-	if orgID != "" {
-		if acctRaw, ok := accounts[orgID]; ok {
-			if acct, ok := acctRaw.(map[string]any); ok {
-				if isUsableChatGPTAccountCandidate(acct, time.Now()) {
-					fillAccountInfo(info, acct, orgID)
-				}
-			}
-		}
-	}
-
-	// 未匹配到时，遍历所有账号：优先 is_default，次选非 free
-	if info.PlanType == "" {
-		type candidate struct {
-			planType  string
-			expiresAt string
-			accountID string
-		}
-		var defaultC, paidC, anyC candidate
-		for key, acctRaw := range accounts {
-			acct, ok := acctRaw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !isUsableChatGPTAccountCandidate(acct, time.Now()) {
-				continue
-			}
-			planType := extractPlanType(acct)
-			if planType == "" {
-				continue
-			}
-			ea := extractEntitlementExpiresAt(acct)
-			id := chatGPTAccountObjectID(acct, key)
-			if anyC.planType == "" {
-				anyC = candidate{planType, ea, id}
-			}
-			if account, ok := acct["account"].(map[string]any); ok {
-				if isDefault, _ := account["is_default"].(bool); isDefault {
-					defaultC = candidate{planType, ea, id}
-				}
-			}
-			if !strings.EqualFold(planType, "free") && paidC.planType == "" {
-				paidC = candidate{planType, ea, id}
-			}
-		}
-		// 优先级：default > 非 free > 任意
-		switch {
-		case defaultC.planType != "":
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = defaultC.planType, defaultC.expiresAt, defaultC.accountID
-		case paidC.planType != "":
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = paidC.planType, paidC.expiresAt, paidC.accountID
-		default:
-			info.PlanType, info.SubscriptionExpiresAt, info.AccountID = anyC.planType, anyC.expiresAt, anyC.accountID
-		}
-	}
-
-	if info.PlanType == "" {
-		slog.Debug("chatgpt_account_check_no_plan_type", "body", truncate(resp.String(), 300))
+	info := selectChatGPTAccountInfo(accounts, orgID, preferredAccountID, time.Now())
+	if info == nil {
+		slog.Debug("chatgpt_account_check_no_plan_type")
 		return nil
 	}
 
-	slog.Info("chatgpt_account_check_success", "plan_type", info.PlanType, "subscription_expires_at", info.SubscriptionExpiresAt, "org_id", orgID)
+	slog.Info("chatgpt_account_check_success", "has_plan_type", info.PlanType != "", "has_subscription_expiry", info.SubscriptionExpiresAt != "")
 	return info
 }
 
-// fetchChatGPTSubscriptionExpiresAt reads the lightweight subscription endpoint used by
-// ChatGPT/Codex clients. Some Plus accounts no longer expose entitlement.expires_at in
-// accounts/check, but this endpoint still returns active_until.
+func selectChatGPTAccountInfo(accounts map[string]any, orgID, preferredAccountID string, now time.Time) *ChatGPTAccountInfo {
+	preferredAccountID = strings.TrimSpace(preferredAccountID)
+	var preferred, org, defaultAccount, paid, first *ChatGPTAccountInfo
+	for key, raw := range accounts {
+		acct, _ := raw.(map[string]any)
+		if !isUsableChatGPTAccountCandidate(acct, now) {
+			continue
+		}
+		info := &ChatGPTAccountInfo{}
+		fillAccountInfo(info, acct, key)
+		// When the token provides the plan, look for its own entitlement even
+		// if poid points at a different default workspace.
+		if preferredAccountID != "" && strings.EqualFold(preferredAccountID, info.AccountID) {
+			if info.SubscriptionExpiresAt != "" {
+				return info
+			}
+			if info.PlanType != "" {
+				preferred = info
+			}
+		}
+		if info.PlanType == "" {
+			continue
+		}
+		if orgID != "" && key == orgID {
+			org = info
+		}
+		account, _ := acct["account"].(map[string]any)
+		if isDefault, _ := account["is_default"].(bool); isDefault {
+			defaultAccount = info
+		}
+		if paid == nil && !strings.EqualFold(info.PlanType, "free") {
+			paid = info
+		}
+		if first == nil {
+			first = info
+		}
+	}
+	for _, info := range []*ChatGPTAccountInfo{preferred, org, defaultAccount, paid, first} {
+		if info != nil {
+			return info
+		}
+	}
+	return nil
+}
+
+// fetchChatGPTSubscriptionExpiresAt reads active_until for the specified account.
 func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, accountID string) string {
 	accountID = strings.TrimSpace(accountID)
 	if accessToken == "" || accountID == "" || clientFactory == nil {
@@ -236,19 +222,17 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 
 	client, err := clientFactory(proxyURL)
 	if err != nil {
-		slog.Debug("chatgpt_subscription_client_error", "error", err.Error())
+		slog.Debug("chatgpt_subscription_client_error")
 		return ""
 	}
 
 	var result struct {
-		PlanType    string `json:"plan_type"`
 		ActiveUntil string `json:"active_until"`
-		WillRenew   bool   `json:"will_renew"`
-		ID          string `json:"id"`
 	}
 	resp, err := client.R().
 		SetContext(ctx).
 		SetHeader("Authorization", "Bearer "+accessToken).
+		SetHeader("ChatGPT-Account-ID", accountID).
 		SetHeader("Origin", "https://chatgpt.com").
 		SetHeader("Referer", "https://chatgpt.com/").
 		SetHeader("Accept", "application/json").
@@ -256,25 +240,25 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 		SetQueryParam("account_id", accountID).
 		Get(chatGPTSubscriptionsURL)
 	if err != nil {
-		slog.Warn("chatgpt_subscription_request_error", "error", err.Error())
+		slog.Warn("chatgpt_subscription_request_error")
 		return ""
 	}
 	if !resp.IsSuccessState() {
-		slog.Warn("chatgpt_subscription_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_subscription_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()))
 		return ""
 	}
 
 	activeUntil := strings.TrimSpace(result.ActiveUntil)
 	if activeUntil == "" {
-		slog.Debug("chatgpt_subscription_no_active_until", "plan_type", result.PlanType, "has_subscription_id", strings.TrimSpace(result.ID) != "", "will_renew", result.WillRenew)
+		slog.Debug("chatgpt_subscription_no_active_until")
 		return ""
 	}
-	if _, err := time.Parse(time.RFC3339, activeUntil); err != nil {
-		slog.Debug("chatgpt_subscription_bad_active_until", "active_until", activeUntil, "error", err.Error())
+	if validChatGPTSubscriptionExpiry(activeUntil) == "" {
+		slog.Debug("chatgpt_subscription_bad_active_until")
 		return ""
 	}
 
-	slog.Info("chatgpt_subscription_success", "plan_type", result.PlanType, "subscription_expires_at", activeUntil, "account_id", accountID)
+	slog.Info("chatgpt_subscription_success")
 	return activeUntil
 }
 
@@ -360,7 +344,15 @@ func extractEntitlementExpiresAt(acct map[string]any) string {
 		return ""
 	}
 	ea, _ := entitlement["expires_at"].(string)
-	return ea
+	return validChatGPTSubscriptionExpiry(ea)
+}
+
+func validChatGPTSubscriptionExpiry(raw string) string {
+	value := strings.TrimSpace(raw)
+	if _, err := time.Parse(time.RFC3339, value); err != nil {
+		return ""
+	}
+	return value
 }
 
 func truncate(s string, n int) string {

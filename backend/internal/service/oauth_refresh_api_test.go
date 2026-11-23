@@ -866,6 +866,115 @@ func TestRefreshIfNeeded_OpenAICASKeepsConcurrentReauthorization(t *testing.T) {
 	require.Zero(t, repo.updateCalls)
 }
 
+func TestOpenAISubscriptionExpiryPeriodicRefresh(t *testing.T) {
+	const old, live = "2027-01-01T00:00:00Z", "2027-03-01T00:00:00Z"
+	snapshot := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339)
+	for _, tc := range []struct {
+		name, plan, stored, live, want string
+		claim                          any
+	}{
+		{"live replaces old", "plus", old, live, live, snapshot},
+		{"snapshot on missing date", "pro", "", "", snapshot, snapshot},
+		{"expired snapshot cannot fill missing date", "plus", "", "", "", "2000-01-01T00:00:00Z"},
+		{"snapshot cannot replace old", "plus", old, "", old, snapshot},
+		{"invalid date preserves old", "plus", old, "bad", old, "bad"},
+		{"workspace has no personal snapshot", "team", "", "", "", snapshot},
+		{"unknown claim type keeps identity", "plus", "", "", "", 123},
+		{"stored account when no id token", "", "", live, live, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := openAIRefreshTestAccount()
+			account.Credentials["chatgpt_account_id"] = "billing"
+			account.Credentials["plan_type"] = "plus"
+			account.Credentials["expires_at"] = time.Now().Add(-time.Minute).Format(time.RFC3339)
+			if tc.stored != "" {
+				account.Credentials["subscription_expires_at"] = tc.stored
+			}
+			client := &subscriptionOAuthClient{response: openai.TokenResponse{AccessToken: "new-access", RefreshToken: "new-refresh", ExpiresIn: 3600}}
+			if tc.plan != "" {
+				client.response.IDToken = subscriptionJWT(t, map[string]any{"chatgpt_account_id": "billing", "chatgpt_plan_type": tc.plan, "chatgpt_subscription_active_until": tc.claim})
+			}
+			svc := NewOpenAIOAuthService(nil, client)
+			t.Cleanup(svc.Stop)
+			server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{
+				onSubscription: func(accountID string) map[string]any {
+					require.Equal(t, "billing", accountID)
+					return map[string]any{"active_until": tc.live}
+				},
+			})
+			t.Cleanup(server.Close)
+			svc.SetPrivacyClientFactory(newTestPrivacyClientFactory(server))
+			repo := &refreshAPIAccountRepo{account: account}
+			result, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(context.Background(), account, NewOpenAITokenRefresher(svc, repo), time.Hour)
+			require.NoError(t, err)
+			require.True(t, result.Refreshed)
+			require.Equal(t, "new-refresh", repo.account.GetOpenAIRefreshToken())
+			if tc.want == "" {
+				require.NotContains(t, repo.account.Credentials, "subscription_expires_at")
+			} else {
+				require.Equal(t, tc.want, repo.account.GetCredential("subscription_expires_at"))
+			}
+			if tc.plan != "" {
+				require.Equal(t, tc.plan, repo.account.GetCredential("plan_type"))
+			}
+		})
+	}
+}
+
+func TestRefreshIfNeeded_OpenAICASKeepsConcurrentSubscriptionExpiry(t *testing.T) {
+	account := openAIRefreshTestAccount()
+	repo := &refreshAPIAccountRepo{account: account}
+	const observed = "2027-09-10T00:00:00Z"
+	repo.beforeSuccessCAS = func(repo *refreshAPIAccountRepo) {
+		repo.beforeSuccessCAS = nil
+		repo.account.Credentials["subscription_expires_at"] = observed
+	}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true,
+		credentials: map[string]any{
+			"access_token": "rotated-access", "refresh_token": "rotated-refresh",
+			"subscription_expires_at": "2027-04-01T00:00:00Z",
+		},
+	}
+	result, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(context.Background(), account, executor, time.Hour)
+	require.NoError(t, err)
+	require.True(t, result.Refreshed)
+	require.Equal(t, 2, repo.openAISuccessCASCalls)
+	require.Equal(t, "rotated-refresh", result.Account.GetOpenAIRefreshToken())
+	require.Equal(t, observed, result.Account.GetCredential("subscription_expires_at"))
+}
+
+func TestOpenAISubscriptionExpiryPeriodicRefreshRejectsAccountMismatch(t *testing.T) {
+	const old = "2025-01-02T00:00:00Z"
+	for _, withIDToken := range []bool{false, true} {
+		account := openAIRefreshTestAccount()
+		account.Credentials["chatgpt_account_id"] = "bound"
+		account.Credentials["plan_type"] = "plus"
+		account.Credentials["subscription_expires_at"] = old
+		account.Credentials["expires_at"] = time.Now().Add(-time.Minute).Format(time.RFC3339)
+		auth := map[string]any{"chatgpt_account_id": "other", "chatgpt_plan_type": "pro"}
+		at := subscriptionJWT(t, auth)
+		client := &subscriptionOAuthClient{response: openai.TokenResponse{AccessToken: at, RefreshToken: "new-refresh", ExpiresIn: 3600}}
+		if withIDToken {
+			client.response.IDToken = subscriptionJWT(t, auth)
+		}
+		svc := NewOpenAIOAuthService(nil, client)
+		t.Cleanup(svc.Stop)
+		svc.SetPrivacyClientFactory(func(string) (*req.Client, error) {
+			t.Error("a rotated token for another account must skip enrichment")
+			return nil, errors.New("blocked")
+		})
+		repo := &refreshAPIAccountRepo{account: account}
+		original := shallowCopyMap(repo.account.Credentials)
+		result, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(context.Background(), account, NewOpenAITokenRefresher(svc, repo), time.Hour)
+		require.ErrorContains(t, err, "reauthorization required")
+		require.True(t, isNonRetryableRefreshError(err))
+		require.False(t, result.Refreshed)
+		require.Zero(t, repo.openAISuccessCASCalls)
+		require.Equal(t, original, repo.account.Credentials)
+	}
+}
+
 func TestRefreshIfNeeded_OpenAIPersistenceFailureContainsProvider(t *testing.T) {
 	for _, failure := range []string{"CAS write", "durable reread"} {
 		t.Run(failure, func(t *testing.T) {
