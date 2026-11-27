@@ -30,6 +30,9 @@ const (
 	// RefreshScopes - scope for token refresh (without offline_access, aligned with CRS project)
 	RefreshScopes = "openid profile email"
 
+	// RefreshGrantInvalidReason is attested by a failed refresh at the token endpoint.
+	RefreshGrantInvalidReason = "upstream_refresh_grant_invalid"
+
 	// Session TTL
 	SessionTTL = 30 * time.Minute
 )

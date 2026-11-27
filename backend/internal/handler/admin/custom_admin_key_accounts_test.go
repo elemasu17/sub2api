@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -51,6 +52,70 @@ func TestScopedAdminAccountErrorsAreClassifiedAndRedacted(t *testing.T) {
 	scopedAdminAccountError(c, errors.New("TOP_SECRET"))
 	if w.Code != 503 || strings.Contains(w.Body.String(), "TOP_SECRET") {
 		t.Fatal(w.Body.String())
+	}
+}
+
+type scopedAccountRefreshStub struct {
+	scopedBulkAccountService
+	account *service.Account
+}
+
+func (s *scopedAccountRefreshStub) GetAccount(context.Context, int64) (*service.Account, error) {
+	return s.account, nil
+}
+
+func (s *scopedAccountRefreshStub) EnsureOpenAIPrivacy(context.Context, *service.Account) string {
+	return ""
+}
+
+func (s *scopedAccountRefreshStub) ScopedAdminWrite(ctx context.Context, _ int64, _ string, _ map[string]json.RawMessage, run func(context.Context, *service.Account) (*service.Account, error)) (*service.Account, error) {
+	return run(ctx, s.account)
+}
+
+type scopedGrantClientStub struct {
+	service.OpenAIOAuthClient
+	err error
+}
+
+func (s scopedGrantClientStub) RefreshTokenWithClientID(context.Context, string, string, string) (*openai.TokenResponse, error) {
+	return nil, s.err
+}
+
+func TestScopedAccountRefreshGrantFailureHTTP(t *testing.T) {
+	const failed = `{"code":502,"message":"上游刷新失败"}`
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"provider grant refused", infraerrors.New(502, openai.RefreshGrantInvalidReason, "PRIVATE"), `{"code":502,"message":"上游刷新失败","reason":"upstream_refresh_grant_invalid"}`},
+		{"generic 502", infraerrors.New(502, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "PRIVATE invalid_grant"), failed},
+		{"provider unauthorized", infraerrors.New(401, "UNAUTHORIZED", "PRIVATE invalid_grant"), failed},
+		{"wrong status", infraerrors.New(403, openai.RefreshGrantInvalidReason, "PRIVATE"), `{"code":403,"message":"操作未授权"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			principal := &adminaccess.Principal{Policy: adminaccess.Policy{Rules: []adminaccess.Rule{{
+				Permissions: []string{"accounts.refresh"}, Platforms: []string{"openai"}, AccountTypes: []string{"oauth"}, GroupIDs: []int64{7},
+			}}}}
+			account := &service.Account{ID: 1, Platform: "openai", Type: "oauth", GroupIDs: []int64{7}, Credentials: map[string]any{"refresh_token": "fixture"}}
+			oauth := service.NewOpenAIOAuthService(nil, scopedGrantClientStub{err: tc.err})
+			defer oauth.Stop()
+			handler := AccountHandler{adminService: &scopedAccountRefreshStub{account: account}, openaiOAuthService: oauth}
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Request = c.Request.WithContext(adminaccess.WithPrincipal(c.Request.Context(), principal))
+			})
+			router.Use(handler.ScopedAdminKeyAccounts)
+			router.POST("/api/v1/admin/accounts/:id/refresh", func(c *gin.Context) { t.Fatal("used unrestricted handler") })
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/1/refresh", nil))
+			require.JSONEq(t, tc.want, rec.Body.String())
+			wantStatus := http.StatusBadGateway
+			if infraerrors.Code(tc.err) == http.StatusForbidden {
+				wantStatus = http.StatusForbidden
+			}
+			require.Equal(t, wantStatus, rec.Code)
+		})
 	}
 }
 func TestScopedAdminAccountMiddlewareKeepsJWTAndDeniesUnavailableService(t *testing.T) {

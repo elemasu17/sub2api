@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
+	"github.com/tidwall/gjson"
 )
 
 // NewOpenAIOAuthClient creates a new OpenAI OAuth client
@@ -83,8 +85,12 @@ func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
+	scoped := adminaccess.RestrictedFromContext(ctx) != nil
 	client, err := createOpenAIReqClient(proxyURL)
 	if err != nil {
+		if scoped {
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "failed to prepare the upstream client")
+		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
 
@@ -106,6 +112,9 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 		Post(s.tokenURL)
 
 	if err != nil {
+		if scoped {
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "upstream token request failed")
+		}
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
 			return nil, newOpenAINoProxyHintError(err)
 		}
@@ -113,10 +122,38 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	}
 
 	if !resp.IsSuccessState() {
+		if scoped {
+			if resp.Response != nil && isOpenAIRefreshGrantRejection(resp.Response, s.tokenURL, resp.Bytes()) {
+				return nil, infraerrors.New(http.StatusBadGateway, openai.RefreshGrantInvalidReason, "upstream rejected the refresh grant")
+			}
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "upstream token refresh failed")
+		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed: status %d, body: %s", resp.StatusCode, resp.String())
 	}
 
 	return &tokenResp, nil
+}
+
+func isOpenAIRefreshGrantRejection(response *http.Response, tokenURL string, body []byte) bool {
+	if response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusUnauthorized {
+		return false
+	}
+	request := response.Request
+	if request == nil || request.URL == nil || request.Method != http.MethodPost || request.URL.String() != tokenURL || request.Response != nil {
+		return false
+	}
+	if len(body) > 64<<10 || !gjson.ValidBytes(body) {
+		return false
+	}
+	code := gjson.GetBytes(body, "error")
+	if code.IsObject() {
+		code = code.Get("code")
+	}
+	switch code.String() {
+	case "invalid_grant", "refresh_token_invalidated", "refresh_token_reused":
+		return true
+	}
+	return false
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {

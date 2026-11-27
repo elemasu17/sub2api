@@ -19,27 +19,29 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 }
 
 // doOpenAIAccountTestUpstream 让 OpenAI OAuth 账号测试与真实转发使用同一插件路径。
-// API Key 和未命中插件的账号保持各自原有的 HTTPUpstream 行为。
+// The boolean identifies responses issued by the native upstream transport.
 func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	request *http.Request,
 	proxyURL string,
 	account *Account,
 	useTLSFallback bool,
-) (*http.Response, error) {
+) (*http.Response, bool, error) {
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
-			return response, err
+			return response, false, err
 		}
 	}
 	if useTLSFallback {
-		return s.httpUpstream.DoWithTLS(
+		response, err := s.httpUpstream.DoWithTLS(
 			request,
 			proxyURL,
 			account.ID,
 			account.Concurrency,
 			s.tlsFPProfileService.ResolveTLSProfile(account),
 		)
+		return response, true, err
 	}
-	return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	response, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+	return response, true, err
 }

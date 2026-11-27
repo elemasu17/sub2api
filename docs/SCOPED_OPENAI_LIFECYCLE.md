@@ -195,6 +195,27 @@ or:
 data: {"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED"}
 ```
 
+An HTTP 401 from the native OpenAI text probe with a structured
+`error.code` of `token_invalidated` or `token_revoked` adds a fixed field to
+the failure event. The native transport sends the account's own OAuth bearer
+and account identifier to the configured endpoint with redirects disabled.
+
+```text
+data: {"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED","error_code":"upstream_credential_invalid"}
+```
+
+This field describes the access credential tested. A caller with
+`accounts.refresh` can submit one `POST /api/v1/admin/accounts/:id/refresh`.
+An explicit denial from the OAuth token endpoint (`invalid_grant`,
+`refresh_token_invalidated`, or `refresh_token_reused` in an HTTP 400/401)
+returns HTTP 502 with JSON `code: 502` and `reason: "upstream_refresh_grant_invalid"`.
+After a successful refresh, repeat the connectivity test. Refresh may also
+succeed for access-only accounts by updating metadata.
+
+Older releases and ambiguous failures omit these markers. Treat their result
+as unknown. Permission errors, timeouts, rate limits and diagnostic text alone
+carry no credential classification.
+
 No model output, raw provider error, account token, or identity is returned.
 Scoped tests do not recover runtime state or persist error, rate-limit, or
 quota-snapshot changes. Invalid/unauthorized requests fail before probing with

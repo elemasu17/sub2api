@@ -19,6 +19,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
@@ -34,17 +35,22 @@ import (
 // repositories, and PostgreSQL are real. These stubs never open a connection.
 type pausedImportOAuthFixture struct {
 	service.OpenAIOAuthClient
-	calls int
+	calls   int
+	failure error
 }
 
 func (f *pausedImportOAuthFixture) RefreshTokenWithClientID(context.Context, string, string, string) (*openai.TokenResponse, error) {
 	f.calls++
+	if f.failure != nil {
+		return nil, f.failure
+	}
 	return &openai.TokenResponse{AccessToken: "refreshed-fixture-access", RefreshToken: "refreshed-fixture-refresh", ExpiresIn: 3600}, nil
 }
 
 type pausedImportModelFixture struct {
 	service.HTTPUpstream
 	status, calls int
+	body          string
 }
 
 func (f *pausedImportModelFixture) DoWithTLS(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
@@ -52,6 +58,9 @@ func (f *pausedImportModelFixture) DoWithTLS(*http.Request, string, int64, int, 
 	body := "data: {\"type\":\"response.completed\"}\n\n"
 	if f.status != 200 {
 		body = `{"error":"PRIVATE_FIXTURE_UPSTREAM_ERROR"}`
+	}
+	if f.body != "" {
+		body = f.body
 	}
 	return &http.Response{StatusCode: f.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 }
@@ -259,6 +268,71 @@ CREATE TRIGGER observe_initial_account AFTER INSERT ON accounts FOR EACH ROW EXE
 		require.NoError(t, db.QueryRow("SELECT notes FROM accounts WHERE id=$1", id).Scan(&notes))
 		require.Equal(t, body["notes"], notes)
 	}
+	t.Run("credential evidence while paused", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/admin/accounts/%d", id)
+		const raw = `{"error":{"code":"token_invalidated","message":"PRIVATE_FIXTURE"}}`
+		const failed = `{"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED"}`
+		var before, after string
+		row := func() string {
+			t.Helper()
+			var row string
+			require.NoError(t, db.QueryRow("SELECT row_to_json(accounts)::text FROM accounts WHERE id=$1", id).Scan(&row))
+			return row
+		}
+		before = row()
+		for _, tc := range []struct {
+			name       string
+			status     int
+			body, want string
+		}{
+			{"revoked", 401, raw, `{"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED","error_code":"upstream_credential_invalid"}`},
+			{"unclassified", 401, `{"error":{"message":"token_invalidated"}}`, failed},
+			{"forbidden", 403, raw, failed},
+			{"rate limited", 429, raw, failed},
+			{"gateway failure", 502, raw, failed},
+		} {
+			t.Run("test/"+tc.name, func(t *testing.T) {
+				model.status, model.body = tc.status, tc.body
+				rec := call("POST", path+"/test", "", map[string]any{"model_id": "gpt-5.4"})
+				require.Equal(t, 200, rec.Code)
+				require.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
+				require.JSONEq(t, tc.want, strings.TrimPrefix(strings.TrimSpace(rec.Body.String()), "data: "))
+			})
+		}
+		const genericRefresh = `{"code":502,"message":"上游刷新失败"}`
+		for _, tc := range []struct {
+			name   string
+			status int
+			reason string
+			want   string
+		}{
+			{"grant refused", 502, openai.RefreshGrantInvalidReason, `{"code":502,"message":"上游刷新失败","reason":"upstream_refresh_grant_invalid"}`},
+			{"rate limited", 429, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", genericRefresh},
+			{"gateway failure", 502, "OPENAI_OAUTH_REQUEST_FAILED", genericRefresh},
+		} {
+			t.Run("refresh/"+tc.name, func(t *testing.T) {
+				oauth.failure = infraerrors.New(tc.status, tc.reason, "PRIVATE_FIXTURE")
+				rec := call("POST", path+"/refresh", "", nil)
+				require.Equal(t, 502, rec.Code)
+				require.JSONEq(t, tc.want, rec.Body.String())
+			})
+		}
+		readOnly := principal.Policy
+		readOnly.Rules = append([]adminaccess.Rule(nil), readOnly.Rules...)
+		readOnly.Rules[0].Permissions = []string{"accounts.read"}
+		readerKey, _, err := settings.CreateScopedAdminKey(context.Background(), service.ScopedAdminKeyInput{Name: "reader fixture", Enabled: true, Policy: readOnly}, owner.ID)
+		require.NoError(t, err)
+		for _, action := range []string{"test", "refresh"} {
+			denied := pausedImportCall(t, router, "POST", path+"/"+action, "", nil, readerKey)
+			require.Equal(t, 403, denied.Code)
+			require.NotContains(t, denied.Body.String(), "upstream_")
+		}
+		require.Equal(t, 5, model.calls)
+		require.Equal(t, 3, oauth.calls)
+		after = row()
+		require.JSONEq(t, before, after)
+		model.calls, model.body, oauth.calls, oauth.failure = 0, "", 0, nil
+	})
 	// Replay after a separate status edit must not create, enable, pause or otherwise mutate the row.
 	_, err = db.Exec("UPDATE accounts SET status='error',schedulable=false WHERE id=$1", id)
 	require.NoError(t, err)
