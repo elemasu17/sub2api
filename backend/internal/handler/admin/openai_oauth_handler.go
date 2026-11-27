@@ -162,6 +162,7 @@ func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 	}
 
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
+		AttemptID:   adminaccess.ExchangeAttemptID(c.Request.Context(), c.Request.Method, c.FullPath(), c.Request.Header),
 		SessionID:   req.SessionID,
 		Code:        req.Code,
 		State:       req.State,

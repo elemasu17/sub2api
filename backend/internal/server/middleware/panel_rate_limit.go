@@ -120,6 +120,11 @@ func (p *PanelRateLimiter) userScoped(scope string, limitOf func(service.PanelRa
 				continue
 			}
 			if !result.Allowed {
+				if id := adminaccess.ExchangeAttemptID(c.Request.Context(), c.Request.Method, c.FullPath(), c.Request.Header); id != "" {
+					c.Header(adminaccess.CodexJobHeader, id)
+					c.Header(adminaccess.CodexExchangeOutcomeHeader, adminaccess.CodexExchangeNotStarted)
+					slog.Info("codex_oauth_exchange", "job_id", id, "phase", "rate_limited_before_handler")
+				}
 				abortPanelRateLimited(c, result.RetryAfter)
 				return
 			}
