@@ -85,8 +85,12 @@ func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
+	scoped := adminaccess.RestrictedFromContext(ctx) != nil
 	client, err := createOpenAIReqClient(proxyURL)
 	if err != nil {
+		if scoped {
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "failed to prepare the upstream client")
+		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
 
@@ -108,6 +112,9 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 		Post(s.tokenURL)
 
 	if err != nil {
+		if scoped {
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "upstream token request failed")
+		}
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
 			return nil, newOpenAINoProxyHintError(err)
 		}
@@ -115,9 +122,11 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	}
 
 	if !resp.IsSuccessState() {
-		if adminaccess.RestrictedFromContext(ctx) != nil && resp.Response != nil &&
-			isOpenAIRefreshGrantRejection(resp.Response, s.tokenURL, resp.Bytes()) {
-			return nil, infraerrors.New(http.StatusBadGateway, openai.RefreshGrantInvalidReason, "upstream rejected the refresh grant")
+		if scoped {
+			if resp.Response != nil && isOpenAIRefreshGrantRejection(resp.Response, s.tokenURL, resp.Bytes()) {
+				return nil, infraerrors.New(http.StatusBadGateway, openai.RefreshGrantInvalidReason, "upstream rejected the refresh grant")
+			}
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "upstream token refresh failed")
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed: status %d, body: %s", resp.StatusCode, resp.String())
 	}

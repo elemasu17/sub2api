@@ -131,3 +131,37 @@ func TestScopedAccountTestRechecksScopeBeforeUpstream(t *testing.T) {
 		require.Contains(t, recorder.Body.String(), `"success":false`)
 	}
 }
+
+func TestScopedAccountTestRequiresAccountOwnedOAuthEvidence(t *testing.T) {
+	for _, name := range []string{"personal access token", "blocked account header override", "failed plugin binding"} {
+		t.Run(name, func(t *testing.T) {
+			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{7},
+				Credentials: map[string]any{"access_token": "fixture", "chatgpt_account_id": "target"}}
+			upstream := &queuedHTTPUpstream{responses: []*http.Response{newJSONResponse(401, `{"error":{"code":"token_revoked"}}`)}}
+			svc := &AccountTestService{httpUpstream: upstream, accountRepo: &scopedTestAccountRepo{account: account}}
+			switch name {
+			case "personal access token":
+				account.Credentials[openAIAuthModeCredentialKey] = OpenAIAuthModePersonalAccessToken
+			case "blocked account header override":
+				account.Credentials[credKeyHeaderOverrideEnabled] = true
+				account.Credentials[credKeyHeaderOverrides] = map[string]any{"chatgpt-account-id": "other"}
+			case "failed plugin binding":
+				svc.pluginManager = &PluginManager{}
+				svc.pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "token_revoked"})
+			}
+			ctx, rec := newTestContext()
+			ctx.Request = ctx.Request.WithContext(adminaccess.WithPrincipal(ctx.Request.Context(), scopedTestPrincipal()))
+			require.Error(t, svc.TestAccountConnection(ctx, 1, "", "", AccountTestModeDefault))
+			want := `{"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED"}`
+			if name == "blocked account header override" {
+				require.Len(t, upstream.requests, 1)
+				require.Equal(t, "target", upstream.requests[0].Header.Get("chatgpt-account-id"))
+				want = `{"type":"test_complete","success":false,"code":"ACCOUNT_TEST_FAILED","error_code":"upstream_credential_invalid"}`
+			}
+			require.JSONEq(t, want, strings.TrimPrefix(strings.TrimSpace(rec.Body.String()), "data: "))
+			if name == "failed plugin binding" {
+				require.Empty(t, upstream.requests)
+			}
+		})
+	}
+}

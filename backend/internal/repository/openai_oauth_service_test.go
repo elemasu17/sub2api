@@ -198,14 +198,27 @@ func TestScopedOpenAIRefreshRejection(t *testing.T) {
 			svc := openaiOAuthService{tokenURL: server.URL}
 			_, err := svc.RefreshToken(ctx, "unit-test-grant", "")
 			require.Error(t, err)
+			require.NotContains(t, err.Error(), "PRIVATE")
+			require.NotContains(t, err.Error(), server.URL)
 			if tc.attested {
 				require.Equal(t, openai.RefreshGrantInvalidReason, infraerrors.Reason(err))
-				require.NotContains(t, err.Error(), "PRIVATE")
 			} else {
 				require.NotEqual(t, openai.RefreshGrantInvalidReason, infraerrors.Reason(err))
 			}
 		})
 	}
+}
+
+func TestScopedRefreshTransportFailureRedactsAddress(t *testing.T) {
+	ctx := adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{KeyID: "unit"})
+	server := newLocalTestServer(t, http.NotFoundHandler())
+	server.Close()
+	svc := openaiOAuthService{tokenURL: server.URL + "/PRIVATE"}
+	_, err := svc.RefreshToken(ctx, "unit-test-grant", "")
+	require.Error(t, err)
+	require.Equal(t, "OPENAI_OAUTH_REQUEST_FAILED", infraerrors.Reason(err))
+	require.NotContains(t, err.Error(), server.URL)
+	require.NotContains(t, err.Error(), "PRIVATE")
 }
 
 // TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，
