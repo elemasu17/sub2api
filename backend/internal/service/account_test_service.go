@@ -969,7 +969,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
+	scoped := adminaccess.RestrictedFromContext(ctx) != nil
+	if scoped {
+		req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
+	}
+	resp, native, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -983,6 +987,15 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if scoped {
+			code := ""
+			if native && isOAuth && !account.IsOpenAIPersonalAccessToken() &&
+				req.Header.Get("Authorization") == "Bearer "+authToken && req.Header.Get("chatgpt-account-id") == account.GetChatGPTAccountID() &&
+				scopedOpenAICredentialRejected(resp) {
+				code = scopedTestCredentialInvalid
+			}
+			return s.sendTestError(c, "Account connectivity test failed", code)
+		}
 		body, _ := io.ReadAll(resp.Body)
 		body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && credentialAccount.IsOpenAIAgentIdentity() && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
@@ -2310,7 +2323,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
+	resp, _, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAICompactProbeExtraUpdates(nil, nil, err, false, time.Now())
@@ -3239,7 +3252,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, false)
+	resp, _, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, false)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Image upstream request failed: %s", err.Error()))
 	}
@@ -3308,12 +3321,16 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 			return
 		}
 		safe := struct {
-			Type    string `json:"type"`
-			Success bool   `json:"success"`
-			Code    string `json:"code,omitempty"`
+			Type      string `json:"type"`
+			Success   bool   `json:"success"`
+			Code      string `json:"code,omitempty"`
+			ErrorCode string `json:"error_code,omitempty"`
 		}{Type: "test_complete", Success: event.Type == "test_complete" && event.Success}
 		if !safe.Success {
 			safe.Code = "ACCOUNT_TEST_FAILED"
+			if event.Code == scopedTestCredentialInvalid {
+				safe.ErrorCode = event.Code
+			}
 		}
 		encoded, _ := json.Marshal(safe)
 		_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", encoded)
@@ -3337,11 +3354,15 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
+	return s.sendTestError(c, errorMsg, "")
+}
+
+func (s *AccountTestService) sendTestError(c *gin.Context, errorMsg, code string) error {
 	if adminaccess.RestrictedFromContext(c.Request.Context()) != nil {
 		errorMsg = "Account connectivity test failed"
 	}
 	logAccountTestError(c, errorMsg)
-	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
+	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg, Code: code})
 	return fmt.Errorf("%s", errorMsg)
 }
 

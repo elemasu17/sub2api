@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -234,6 +236,9 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 			updated, _, err := h.refreshSingleAccount(txctx, a)
 			if err != nil {
 				code := infraerrors.Code(err)
+				if a.IsOpenAIOAuth() && code == http.StatusBadGateway && infraerrors.Reason(err) == openai.RefreshGrantInvalidReason {
+					return nil, err
+				}
 				if code != 400 && code != 403 && code != 404 && code != 409 && code != 503 {
 					return nil, infraerrors.New(502, "SCOPED_REFRESH_FAILED", "上游刷新失败")
 				}
@@ -250,6 +255,10 @@ func (h *AccountHandler) ScopedAdminKeyAccounts(c *gin.Context) {
 	}
 	a, err := api.ScopedAdminWrite(ctx, id, action, fields, run)
 	if err != nil {
+		if action == "accounts.refresh" && infraerrors.Code(err) == http.StatusBadGateway && infraerrors.Reason(err) == openai.RefreshGrantInvalidReason {
+			response.ErrorWithDetails(c, http.StatusBadGateway, "上游刷新失败", openai.RefreshGrantInvalidReason, nil)
+			return
+		}
 		scopedAdminAccountError(c, err)
 		return
 	}

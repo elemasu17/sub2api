@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -158,6 +159,53 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_FormFields() {
 	}
 	require.Equal(s.T(), "at2", resp.AccessToken)
 	require.Equal(s.T(), "rt2", resp.RefreshToken)
+}
+
+func TestScopedOpenAIRefreshRejection(t *testing.T) {
+	const detail = `{"error":{"code":"refresh_token_invalidated","message":"PRIVATE"}}`
+	ctx := adminaccess.WithPrincipal(context.Background(), &adminaccess.Principal{KeyID: "unit"})
+	for _, tc := range []struct {
+		name     string
+		status   int
+		body     string
+		attested bool
+	}{
+		{"rfc grant", 400, `{"error":"invalid_grant","error_description":"PRIVATE"}`, true},
+		{"invalidated", 401, detail, true},
+		{"reused", 401, `{"error":{"code":"refresh_token_reused"}}`, true},
+		{"shared client", 401, `{"error":"invalid_client","description":"invalid_grant"}`, false},
+		{"untyped", 401, "refresh_token_invalidated", false},
+		{"forbidden", 403, detail, false},
+		{"rate limit", 429, detail, false},
+		{"gateway", 502, detail, false},
+		{"redirect", 307, detail, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newLocalTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status == 307 && r.URL.Path != "/redirect" {
+					http.Redirect(w, r, "/redirect", http.StatusTemporaryRedirect)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if tc.status == 307 {
+					w.WriteHeader(401)
+				} else {
+					w.WriteHeader(tc.status)
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			svc := openaiOAuthService{tokenURL: server.URL}
+			_, err := svc.RefreshToken(ctx, "unit-test-grant", "")
+			require.Error(t, err)
+			if tc.attested {
+				require.Equal(t, openai.RefreshGrantInvalidReason, infraerrors.Reason(err))
+				require.NotContains(t, err.Error(), "PRIVATE")
+			} else {
+				require.NotEqual(t, openai.RefreshGrantInvalidReason, infraerrors.Reason(err))
+			}
+		})
+	}
 }
 
 // TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，

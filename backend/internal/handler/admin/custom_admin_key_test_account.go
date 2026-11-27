@@ -53,6 +53,6 @@ func (h *AccountHandler) scopedAdminTest(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")
 	// The service rechecks the resource after loading it and emits only a boolean
-	// completion event. This branch deliberately never calls runtime recovery.
+	// completion event with an optional fixed failure reason.
 	_ = h.accountTestService.TestAccountConnection(c, id, model, "", service.AccountTestModeDefault)
 }
