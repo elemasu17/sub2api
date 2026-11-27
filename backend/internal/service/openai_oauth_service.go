@@ -115,6 +115,7 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 
 // OpenAIExchangeCodeInput represents the input for code exchange
 type OpenAIExchangeCodeInput struct {
+	AttemptID   string
 	SessionID   string
 	Code        string
 	State       string
@@ -184,9 +185,18 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	}
 
 	// Exchange code for token
+	if input.AttemptID != "" {
+		slog.Info("codex_oauth_exchange", "job_id", input.AttemptID, "phase", "upstream_attempt_started")
+	}
 	tokenResp, err := s.oauthClient.ExchangeCode(ctx, input.Code, session.CodeVerifier, redirectURI, proxyURL, clientID)
 	if err != nil {
+		if input.AttemptID != "" {
+			slog.Info("codex_oauth_exchange", "job_id", input.AttemptID, "phase", "upstream_attempt_failed")
+		}
 		return nil, err
+	}
+	if input.AttemptID != "" {
+		slog.Info("codex_oauth_exchange", "job_id", input.AttemptID, "phase", "token_received")
 	}
 
 	// Delete session after successful exchange

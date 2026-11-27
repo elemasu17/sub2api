@@ -186,3 +186,61 @@ func TestAdminFullAccessRetainsPerKeyRateLimit(t *testing.T) {
 	}
 	require.Equal(t, int64(2), allower.counts["panel:global:admin-key:full"])
 }
+
+func TestScopedExchangeThrottleReceipt(t *testing.T) {
+	const exchange = "/api/v1/admin/openai/exchange-code"
+	const job = "b77a8ed8-04d3-4d60-8eb1-df2ebedcafdf"
+	scoped := &adminaccess.Principal{KeyID: "test", Policy: adminaccess.Policy{GlobalPermissions: []string{"openai.oauth.authorize"}}}
+	for _, tc := range []struct {
+		name, method, path string
+		p                  *adminaccess.Principal
+		ids                []string
+		receipt            bool
+	}{
+		{"exchange", "POST", exchange, scoped, []string{job}, true},
+		{"duplicate id", "POST", exchange, scoped, []string{job, job}, false},
+		{"missing id", "POST", exchange, scoped, nil, false},
+		{"invalid id", "POST", exchange, scoped, []string{"do-not-reflect"}, false},
+		{"generate link", "POST", "/api/v1/admin/openai/generate-auth-url", scoped, []string{job}, false},
+		{"read", "GET", exchange, scoped, []string{job}, false},
+		{"full access", "POST", exchange, &adminaccess.Principal{KeyID: "full", Policy: adminaccess.Policy{FullAccess: true}}, []string{job}, false},
+		{"no permission", "POST", exchange, &adminaccess.Principal{KeyID: "test"}, []string{job}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limiter := &PanelRateLimiter{limiter: &fakePanelAllower{}, settingService: newPanelRateLimitTestService(t,
+				`{"enabled":true,"user_rpm":1,"heavy_rpm":1,"exempt_admin":false}`)}
+			r := gin.New()
+			r.Use(func(c *gin.Context) {
+				c.Set(string(ContextKeyUser), AuthSubject{UserID: 9})
+				c.Request = c.Request.WithContext(adminaccess.WithPrincipal(c.Request.Context(), tc.p))
+			}, limiter.Global())
+			calls := 0
+			r.Handle(tc.method, tc.path, func(c *gin.Context) { calls++; c.Status(http.StatusTooManyRequests) })
+			request := func() *httptest.ResponseRecorder {
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				for _, id := range tc.ids {
+					req.Header.Add(adminaccess.CodexJobHeader, id)
+				}
+				req.Header.Set(adminaccess.CodexExchangeOutcomeHeader, "spoofed")
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, req)
+				return w
+			}
+			first := request()
+			require.Equal(t, http.StatusTooManyRequests, first.Code)
+			require.Empty(t, first.Header().Get(adminaccess.CodexExchangeOutcomeHeader))
+			require.Empty(t, first.Header().Get(adminaccess.CodexJobHeader))
+			throttled := request()
+			require.Equal(t, http.StatusTooManyRequests, throttled.Code)
+			require.Equal(t, 1, calls)
+			require.NotEmpty(t, throttled.Header().Get("Retry-After"))
+			if tc.receipt {
+				require.Equal(t, "not-started", throttled.Header().Get(adminaccess.CodexExchangeOutcomeHeader))
+				require.Equal(t, job, throttled.Header().Get(adminaccess.CodexJobHeader))
+			} else {
+				require.Empty(t, throttled.Header().Get(adminaccess.CodexExchangeOutcomeHeader))
+				require.Empty(t, throttled.Header().Get(adminaccess.CodexJobHeader))
+			}
+		})
+	}
+}
